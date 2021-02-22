@@ -1,0 +1,2414 @@
+---
+title: "Analysis of circRNA expression in Erythroid Cells"
+author: "BP Nicolet"
+date: "22/02/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(plyr)
+library(dplyr)
+library(pheatmap)
+library(ggplot2)
+library(RColorBrewer)
+library(colorRamps)
+library(devtools)
+library(ggfortify)
+library(reshape)
+library(circlize)
+library(DESeq2)
+
+
+knitr::opts_knit$set("/home/ben/Analysis/")
+
+```
+
+
+# importing datasets from DCC (circRNA and linear RNA) 
+```{r DCC import}
+
+## Here we import the circRNA and linRNA(at circRNA position) obtained from DCC output ##
+## See methods of paper for more info:  https://doi.org/10.1101/2020.10.22.348276 ##
+
+### importing DCC circRNA counts ###
+
+# DCC_ery <- read.delim('/home/ben/Analysis/circRNA_erys/circErys/DCC_hg19/CircRNACount',header=T)
+# 
+# # DCC start sites are always 1nt after CE2... Here I correct for that
+# DCC_ery$Start <- as.numeric(DCC_ery$Start -1)
+# 
+# # Making circRNA ID format (Chr:Start-End)
+# DCC_ery$ID <- do.call(paste, c(DCC_ery[c("Start", "End")], sep = "-"))
+# DCC_ery$ID <- do.call(paste, c(DCC_ery[c("Chr", "ID")], sep = ":"))
+# 
+# #head(DCC_ery)
+# 
+# # Remove circRNA from mitochondria #
+# dim(DCC_ery)
+# DCC_ery <- subset(DCC_ery, Chr != "chrM")
+# dim(DCC_ery)
+# 
+# # Make an ordered file for the rest of the analysis #
+# colnames(DCC_ery) <- c("Chr","Start","End","A_d0","B_d0","C_d0","D_d0","A_d1","B_d1","C_d1","D_d1",
+#                          "A_d2","B_d2","C_d2","D_d2","A_d3","B_d3","C_d3","D_d3",
+#                          "A_d4","B_d4","C_d4","D_d4","A_d5","B_d5","C_d5","D_d5",
+#                          "A_d6","B_d6","C_d6","D_d6","A_d7","B_d7","C_d7","D_d7",
+#                          "A_d9","B_d9","C_d9","D_d9","A_d12","B_d12","C_d12","D_d12","ID")
+# 
+# head(DCC_ery)
+# dim(DCC_ery)
+# 
+# # Combine duplicate counts using IDs #
+# DCC_ery <- ddply(DCC_ery, "ID", numcolwise(sum))
+# dim(DCC_ery)
+# 
+# write.table(DCC_ery,"circRNA_counts_DCC_ery_diff_filtered.csv",sep = ";",dec=",",row.names = F)
+
+## As job takes quite some time, savirg the object once and importing the filtered object only ##
+DCC_ery <- read.delim('/home/ben/Analysis/circRNA_erys/circErys/circRNA_counts_DCC_ery_diff_filtered.csv',header=T,sep = ";")
+
+
+
+
+#______________________________________________________________________________________________________#
+###                                importing DCC linear RNA counts                                   ###
+# Notes: these counts are of the reads that align in a linear fashion on onto the genome at the start and the end position of a circRNA #
+
+DCC_ery_lin <- read.delim('/home/ben/Analysis/circRNA_erys/circErys/Linear_counts_DCC_ery_diff_filtered.csv',header=T,sep=";")
+#head(DCC_ery_lin) # The linear count positions are already corrected for the -1 of DCC
+
+# DCC_ery_lin <- read.delim('/home/ben/Analysis/circRNA_erys/circErys/LinearCount_erys',header=T)
+# 
+# # DCC start sites are always 1nt after CE... Here I correct for that
+# DCC_ery_lin$Start <- as.numeric(DCC_ery_lin$Start -1)
+# 
+# # Making circRNA ID format (Chr:Start-End)
+# DCC_ery_lin$ID <- do.call(paste, c(DCC_ery_lin[c("Start", "End")], sep = "-"))
+# DCC_ery_lin$ID <- do.call(paste, c(DCC_ery_lin[c("Chr", "ID")], sep = ":"))
+# 
+# head(DCC_ery_lin)
+# 
+# 
+# colnames(DCC_ery_lin) <- c("Chr","Start","End","A_d0_lin","B_d0_lin","C_d0_lin","D_d0_lin","A_d1_lin","B_d1_lin","C_d1_lin","D_d1_lin","A_d2_lin","B_d2_lin","C_d2_lin","D_d2_lin","A_d3_lin","B_d3_lin","C_d3_lin","D_d3_lin",
+#                          "A_d4_lin","B_d4_lin","C_d4_lin","D_d4_lin","A_d5_lin","B_d5_lin","C_d5_lin","D_d5_lin",
+#                          "A_d6_lin","B_d6_lin","C_d6_lin","D_d6_lin","A_d7_lin","B_d7_lin","C_d7_lin","D_d7_lin",
+#                          "A_d9_lin","B_d9_lin","C_d9_lin","D_d9_lin","A_d12_lin","B_d12_lin","C_d12_lin","D_d12_lin","ID")
+# 
+# head(DCC_ery_lin)
+# dim(DCC_ery_lin)
+# 
+# # Combine duplicate counts using IDs #
+# DCC_ery_lin <- ddply(DCC_ery_lin, "ID", numcolwise(sum))
+# dim(DCC_ery_lin)
+# 
+# 
+# 
+# 
+# write.table(DCC_ery_lin,"/home/ben/Analysis/circRNA_erys/circErys/Linear_counts_DCC_ery_diff_filtered.csv",sep = ";",dec=",",row.names = F)
+
+
+```
+
+# DCC circRNA filtering
+```{r DCC circRNA filtering}
+## We first filter for low confidence circRNA (>=2 junction reads per circRNA in >=1 sample) ##
+DCC_ery_LC <- NULL
+DCC_ery_LC <- subset(DCC_ery,
+  (as.numeric(DCC_ery$A_d0)>=2 |
+   as.numeric(DCC_ery$B_d0)>=2 |
+   as.numeric(DCC_ery$C_d0)>=2 |
+   as.numeric(DCC_ery$D_d0)>=2)|
+  (as.numeric(DCC_ery$A_d1)>=2 |
+   as.numeric(DCC_ery$B_d1)>=2 |
+   as.numeric(DCC_ery$C_d1)>=2 |
+   as.numeric(DCC_ery$D_d1)>=2)|
+  (as.numeric(DCC_ery$A_d12)>=2 |
+   as.numeric(DCC_ery$B_d12)>=2 |
+   as.numeric(DCC_ery$C_d12)>=2 |
+   as.numeric(DCC_ery$D_d12)>=2)|
+  (as.numeric(DCC_ery$A_d2)>=2 |
+   as.numeric(DCC_ery$B_d2)>=2 |
+   as.numeric(DCC_ery$C_d2)>=2 |
+   as.numeric(DCC_ery$D_d2)>=2)|
+  (as.numeric(DCC_ery$A_d3)>=2 |
+   as.numeric(DCC_ery$B_d3)>=2 |
+   as.numeric(DCC_ery$C_d3)>=2 |
+   as.numeric(DCC_ery$D_d3)>=2)|
+  (as.numeric(DCC_ery$A_d4)>=2 |
+   as.numeric(DCC_ery$B_d4)>=2 |
+   as.numeric(DCC_ery$C_d4)>=2 |
+   as.numeric(DCC_ery$D_d4)>=2)|
+  (as.numeric(DCC_ery$A_d5)>=2 |
+   as.numeric(DCC_ery$B_d5)>=2 |
+   as.numeric(DCC_ery$C_d5)>=2 |
+   as.numeric(DCC_ery$D_d5)>=2)|
+  (as.numeric(DCC_ery$A_d6)>=2 |
+   as.numeric(DCC_ery$B_d6)>=2 |
+   as.numeric(DCC_ery$C_d6)>=2 |
+   as.numeric(DCC_ery$D_d6)>=2)|
+  (as.numeric(DCC_ery$A_d7)>=2 |
+   as.numeric(DCC_ery$B_d7)>=2 |
+   as.numeric(DCC_ery$C_d7)>=2 |
+   as.numeric(DCC_ery$D_d7)>=2)|
+  (as.numeric(DCC_ery$A_d9)>=2 |
+   as.numeric(DCC_ery$B_d9)>=2 |
+   as.numeric(DCC_ery$C_d9)>=2 |
+   as.numeric(DCC_ery$D_d9)>=2))
+
+dim(DCC_ery_LC) # 89924 circRNAs
+DCC_ery_LC[is.na(DCC_ery_LC)]=0
+
+
+## We then filter for high confidence circRNAs (>=2 junction reads per circRNA in all samples of a time point) ##
+DCC_ery[is.na(DCC_ery)]=0
+DCC_ery_hc <- subset(DCC_ery,
+    (as.numeric(DCC_ery$A_d0)>=2&
+     as.numeric(DCC_ery$B_d0)>=2&
+     as.numeric(DCC_ery$C_d0)>=2&
+     as.numeric(DCC_ery$D_d0)>=2)|
+      
+    (as.numeric(DCC_ery$A_d1)>=2&
+     as.numeric(DCC_ery$B_d1)>=2&
+     as.numeric(DCC_ery$C_d1)>=2&
+     as.numeric(DCC_ery$D_d1)>=2)|
+    
+    (as.numeric(DCC_ery$A_d12)>=2&
+     as.numeric(DCC_ery$B_d12)>=2&
+     as.numeric(DCC_ery$C_d12)>=2&
+     as.numeric(DCC_ery$D_d12)>=2)|
+      
+    (as.numeric(DCC_ery$A_d2)>=2&
+     as.numeric(DCC_ery$B_d2)>=2&
+     as.numeric(DCC_ery$C_d2)>=2&
+     as.numeric(DCC_ery$D_d2)>=2)|
+      
+    (as.numeric(DCC_ery$A_d3)>=2&
+     as.numeric(DCC_ery$B_d3)>=2&
+     as.numeric(DCC_ery$C_d3)>=2&
+     as.numeric(DCC_ery$D_d3)>=2)|
+      
+    (as.numeric(DCC_ery$A_d4)>=2&
+       as.numeric(DCC_ery$B_d4)>=2&
+       as.numeric(DCC_ery$C_d4)>=2&
+       as.numeric(DCC_ery$D_d4)>=2)|
+      
+    (as.numeric(DCC_ery$A_d5)>=2&
+       as.numeric(DCC_ery$B_d5)>=2&
+       as.numeric(DCC_ery$C_d5)>=2&
+       as.numeric(DCC_ery$D_d5)>=2)|
+      
+    (as.numeric(DCC_ery$A_d6)>=2&
+       as.numeric(DCC_ery$B_d6)>=2&
+       as.numeric(DCC_ery$C_d6)>=2&
+       as.numeric(DCC_ery$D_d6)>=2)|
+      
+    (as.numeric(DCC_ery$A_d7)>=2&
+       as.numeric(DCC_ery$B_d7)>=2&
+       as.numeric(DCC_ery$C_d7)>=2&
+       as.numeric(DCC_ery$D_d7)>=2)|
+      
+    (as.numeric(DCC_ery$A_d9)>=2&
+       as.numeric(DCC_ery$B_d9)>=2&
+       as.numeric(DCC_ery$C_d9)>=2&
+       as.numeric(DCC_ery$D_d9)>=2))
+
+dim(DCC_ery_hc) # 1163 circRNAs
+
+```
+
+
+
+# CE2 import
+```{r CE2 import}
+
+## Here we import the circRNA counts obtained from CircExplorer2 (CE2) ##
+## See methods of paper for more info:  https://doi.org/10.1101/2020.10.22.348276 ##
+{
+  A_d0 <- read.delim('/home/ben/Analysis/circRNA_erys/circErys/CE_hg19/EBL-A-d0-15circ_Annotation.txt',header=F)
+  B_d0 <- read.delim('/home/ben/Analysis/circRNA_erys/circErys/CE_hg19/EBL-B-d0-64circ_Annotation.txt',header=F)
+  C_d0 <- read.delim('/home/ben/Analysis/circRNA_erys/circErys/CE_hg19/EBL-C-d0-3circ_Annotation.txt',header=F)
+  D_d0 <- read.delim('/home/ben/Analysis/circRNA_erys/circErys/CE_hg19/EBL-D-d0-70circ_Annotation.txt',header=F)
+  
+  A_d1 <- read.delim('/home/ben/Analysis/circRNA_erys/circErys/CE_hg19/EBL-A-d1-51circ_Annotation.txt',header=F)
+  B_d1 <- read.delim('/home/ben/Analysis/circRNA_erys/circErys/CE_hg19/EBL-B-d1-80circ_Annotation.txt',header=F)
+  C_d1 <- read.delim('/home/ben/Analysis/circRNA_erys/circErys/CE_hg19/EBL-C-d1-21circ_Annotation.txt',header=F)
+  D_d1 <- read.delim('/home/ben/Analysis/circRNA_erys/circErys/CE_hg19/EBL-D-d1-38circ_Annotation.txt',header=F)
+  
+  A_d2 <- read.delim('/home/ben/Analysis/circRNA_erys/circErys/CE_hg19/EBL-A-d2-54circ_Annotation.txt',header=F)
+  B_d2 <- read.delim('/home/ben/Analysis/circRNA_erys/circErys/CE_hg19/EBL-B-d2-8circ_Annotation.txt',header=F)
+  C_d2 <- read.delim('/home/ben/Analysis/circRNA_erys/circErys/CE_hg19/EBL-C-d2-35circ_Annotation.txt',header=F)
+  D_d2 <- read.delim('/home/ben/Analysis/circRNA_erys/circErys/CE_hg19/EBL-D-d2-25circ_Annotation.txt',header=F)
+  
+  A_d3 <- read.delim('/home/ben/Analysis/circRNA_erys/circErys/CE_hg19/EBL-A-d3-62circ_Annotation.txt',header=F)
+  B_d3 <- read.delim('/home/ben/Analysis/circRNA_erys/circErys/CE_hg19/EBL-B-d3-17circ_Annotation.txt',header=F)
+  C_d3 <- read.delim('/home/ben/Analysis/circRNA_erys/circErys/CE_hg19/EBL-C-d3-60circ_Annotation.txt',header=F)
+  D_d3 <- read.delim('/home/ben/Analysis/circRNA_erys/circErys/CE_hg19/EBL-D-d3-5circ_Annotation.txt',header=F)
+  
+  A_d4 <- read.delim('/home/ben/Analysis/circRNA_erys/circErys/CE_hg19/EBL-A-d4-57circ_Annotation.txt',header=F)
+  B_d4 <- read.delim('/home/ben/Analysis/circRNA_erys/circErys/CE_hg19/EBL-B-d4-75circ_Annotation.txt',header=F)
+  C_d4 <- read.delim('/home/ben/Analysis/circRNA_erys/circErys/CE_hg19/EBL-C-d4-52circ_Annotation.txt',header=F)
+  D_d4 <- read.delim('/home/ben/Analysis/circRNA_erys/circErys/CE_hg19/EBL-D-d4-12circ_Annotation.txt',header=F)
+  
+  A_d5 <- read.delim('/home/ben/Analysis/circRNA_erys/circErys/CE_hg19/EBL-A-d5-66circ_Annotation.txt',header=F)
+  B_d5 <- read.delim('/home/ben/Analysis/circRNA_erys/circErys/CE_hg19/EBL-B-d5-88circ_Annotation.txt',header=F)
+  C_d5 <- read.delim('/home/ben/Analysis/circRNA_erys/circErys/CE_hg19/EBL-C-d5-42circ_Annotation.txt',header=F)
+  D_d5 <- read.delim('/home/ben/Analysis/circRNA_erys/circErys/CE_hg19/EBL-D-d5-84circ_Annotation.txt',header=F)
+  
+  A_d6 <- read.delim('/home/ben/Analysis/circRNA_erys/circErys/CE_hg19/EBL-A-d6-31circ_Annotation.txt',header=F)
+  B_d6 <- read.delim('/home/ben/Analysis/circRNA_erys/circErys/CE_hg19/EBL-B-d6-89circ_Annotation.txt',header=F)
+  C_d6 <- read.delim('/home/ben/Analysis/circRNA_erys/circErys/CE_hg19/EBL-C-d6-34circ_Annotation.txt',header=F)
+  D_d6 <- read.delim('/home/ben/Analysis/circRNA_erys/circErys/CE_hg19/EBL-D-d6-24circ_Annotation.txt',header=F)
+  
+  A_d7 <- read.delim('/home/ben/Analysis/circRNA_erys/circErys/CE_hg19/EBL-A-d7-87circ_Annotation.txt',header=F)
+  B_d7 <- read.delim('/home/ben/Analysis/circRNA_erys/circErys/CE_hg19/EBL-B-d7-46circ_Annotation.txt',header=F)
+  C_d7 <- read.delim('/home/ben/Analysis/circRNA_erys/circErys/CE_hg19/EBL-C-d7-65circ_Annotation.txt',header=F)
+  D_d7 <- read.delim('/home/ben/Analysis/circRNA_erys/circErys/CE_hg19/EBL-D-d7-48circ_Annotation.txt',header=F)
+  
+  A_d9 <- read.delim('/home/ben/Analysis/circRNA_erys/circErys/CE_hg19/EBL-A-d9-72circ_Annotation.txt',header=F)
+  B_d9 <- read.delim('/home/ben/Analysis/circRNA_erys/circErys/CE_hg19/EBL-B-d9-27circ_Annotation.txt',header=F)
+  C_d9 <- read.delim('/home/ben/Analysis/circRNA_erys/circErys/CE_hg19/EBL-C-d9-55circ_Annotation.txt',header=F)
+  D_d9 <- read.delim('/home/ben/Analysis/circRNA_erys/circErys/CE_hg19/EBL-D-d9-69circ_Annotation.txt',header=F)
+  
+  A_d12 <- read.delim('/home/ben/Analysis/circRNA_erys/circErys/CE_hg19/EBL-A-d12-14circ_Annotation.txt',header=F)
+  B_d12 <- read.delim('/home/ben/Analysis/circRNA_erys/circErys/CE_hg19/EBL-B-d12-86circ_Annotation.txt',header=F)
+  C_d12 <- read.delim('/home/ben/Analysis/circRNA_erys/circErys/CE_hg19/EBL-C-d12-79circ_Annotation.txt',header=F)
+  D_d12 <- read.delim('/home/ben/Analysis/circRNA_erys/circErys/CE_hg19/EBL-D-d12-26circ_Annotation.txt',header=F)
+}
+
+## Keeping only the genomic positions and the circRNA read counts per sample ##
+{
+  A_d0 <- cbind.data.frame(A_d0[,1:3], A_d0[,13])
+  B_d0 <- cbind.data.frame(B_d0[,1:3], B_d0[,13])
+  C_d0 <- cbind.data.frame(C_d0[,1:3], C_d0[,13])
+  D_d0 <- cbind.data.frame(D_d0[,1:3], D_d0[,13])
+  
+  A_d1 <- cbind.data.frame(A_d1[,1:3], A_d1[,13])
+  B_d1 <- cbind.data.frame(B_d1[,1:3], B_d1[,13])
+  C_d1 <- cbind.data.frame(C_d1[,1:3], C_d1[,13])
+  D_d1 <- cbind.data.frame(D_d1[,1:3], D_d1[,13])
+  
+  A_d2 <- cbind.data.frame(A_d2[,1:3], A_d2[,13])
+  B_d2 <- cbind.data.frame(B_d2[,1:3], B_d2[,13])
+  C_d2 <- cbind.data.frame(C_d2[,1:3], C_d2[,13])
+  D_d2 <- cbind.data.frame(D_d2[,1:3], D_d2[,13])
+  
+  A_d3 <- cbind.data.frame(A_d3[,1:3], A_d3[,13])
+  B_d3 <- cbind.data.frame(B_d3[,1:3], B_d3[,13])
+  C_d3 <- cbind.data.frame(C_d3[,1:3], C_d3[,13])
+  D_d3 <- cbind.data.frame(D_d3[,1:3], D_d3[,13])
+  
+  A_d4 <- cbind.data.frame(A_d4[,1:3], A_d4[,13])
+  B_d4 <- cbind.data.frame(B_d4[,1:3], B_d4[,13])
+  C_d4 <- cbind.data.frame(C_d4[,1:3], C_d4[,13])
+  D_d4 <- cbind.data.frame(D_d4[,1:3], D_d4[,13])
+  
+  A_d5 <- cbind.data.frame(A_d5[,1:3], A_d5[,13])
+  B_d5 <- cbind.data.frame(B_d5[,1:3], B_d5[,13])
+  C_d5 <- cbind.data.frame(C_d5[,1:3], C_d5[,13])
+  D_d5 <- cbind.data.frame(D_d5[,1:3], D_d5[,13])
+  
+  A_d6 <- cbind.data.frame(A_d6[,1:3], A_d6[,13])
+  B_d6 <- cbind.data.frame(B_d6[,1:3], B_d6[,13])
+  C_d6 <- cbind.data.frame(C_d6[,1:3], C_d6[,13])
+  D_d6 <- cbind.data.frame(D_d6[,1:3], D_d6[,13])
+  
+  A_d7 <- cbind.data.frame(A_d7[,1:3], A_d7[,13])
+  B_d7 <- cbind.data.frame(B_d7[,1:3], B_d7[,13])
+  C_d7 <- cbind.data.frame(C_d7[,1:3], C_d7[,13])
+  D_d7 <- cbind.data.frame(D_d7[,1:3], D_d7[,13])
+  
+  A_d9 <- cbind.data.frame(A_d9[,1:3], A_d9[,13])
+  B_d9 <- cbind.data.frame(B_d9[,1:3], B_d9[,13])
+  C_d9 <- cbind.data.frame(C_d9[,1:3], C_d9[,13])
+  D_d9 <- cbind.data.frame(D_d9[,1:3], D_d9[,13])
+  
+  A_d12 <- cbind.data.frame(A_d12[,1:3], A_d12[,13])
+  B_d12 <- cbind.data.frame(B_d12[,1:3], B_d12[,13])
+  C_d12 <- cbind.data.frame(C_d12[,1:3], C_d12[,13])
+  D_d12 <- cbind.data.frame(D_d12[,1:3], D_d12[,13])
+}
+
+
+## Merging stuff together by ID ##
+{
+  CE_ery <- merge(A_d0, B_d0, by= c("V1","V2","V3"), all.x= T, all.y= T)
+  CE_ery <- merge(CE_ery, C_d0, by= c("V1","V2","V3"), all.x= T, all.y= T)
+  CE_ery <- merge(CE_ery, D_d0, by= c("V1","V2","V3"), all.x= T, all.y= T)
+  
+  CE_ery <- merge(CE_ery, A_d1, by= c("V1","V2","V3"), all.x= T, all.y= T)
+  CE_ery <- merge(CE_ery, B_d1, by= c("V1","V2","V3"), all.x= T, all.y= T)
+  CE_ery <- merge(CE_ery, C_d1, by= c("V1","V2","V3"), all.x= T, all.y= T)
+  CE_ery <- merge(CE_ery, D_d1, by= c("V1","V2","V3"), all.x= T, all.y= T)
+  
+  CE_ery <- merge(CE_ery, A_d2, by= c("V1","V2","V3"), all.x= T, all.y= T)
+  CE_ery <- merge(CE_ery, B_d2, by= c("V1","V2","V3"), all.x= T, all.y= T)
+  CE_ery <- merge(CE_ery, C_d2, by= c("V1","V2","V3"), all.x= T, all.y= T)
+  CE_ery <- merge(CE_ery, D_d2, by= c("V1","V2","V3"), all.x= T, all.y= T)
+  
+  CE_ery <- merge(CE_ery, A_d3, by= c("V1","V2","V3"), all.x= T, all.y= T)
+  CE_ery <- merge(CE_ery, B_d3, by= c("V1","V2","V3"), all.x= T, all.y= T)
+  CE_ery <- merge(CE_ery, C_d3, by= c("V1","V2","V3"), all.x= T, all.y= T)
+  CE_ery <- merge(CE_ery, D_d3, by= c("V1","V2","V3"), all.x= T, all.y= T)
+  
+  CE_ery <- merge(CE_ery, A_d4, by= c("V1","V2","V3"), all.x= T, all.y= T)
+  CE_ery <- merge(CE_ery, B_d4, by= c("V1","V2","V3"), all.x= T, all.y= T)
+  CE_ery <- merge(CE_ery, C_d4, by= c("V1","V2","V3"), all.x= T, all.y= T)
+  CE_ery <- merge(CE_ery, D_d4, by= c("V1","V2","V3"), all.x= T, all.y= T)
+  
+  CE_ery <- merge(CE_ery, A_d5, by= c("V1","V2","V3"), all.x= T, all.y= T)
+  CE_ery <- merge(CE_ery, B_d5, by= c("V1","V2","V3"), all.x= T, all.y= T)
+  CE_ery <- merge(CE_ery, C_d5, by= c("V1","V2","V3"), all.x= T, all.y= T)
+  CE_ery <- merge(CE_ery, D_d5, by= c("V1","V2","V3"), all.x= T, all.y= T)
+  
+  CE_ery <- merge(CE_ery, A_d6, by= c("V1","V2","V3"), all.x= T, all.y= T)
+  CE_ery <- merge(CE_ery, B_d6, by= c("V1","V2","V3"), all.x= T, all.y= T)
+  CE_ery <- merge(CE_ery, C_d6, by= c("V1","V2","V3"), all.x= T, all.y= T)
+  CE_ery <- merge(CE_ery, D_d6, by= c("V1","V2","V3"), all.x= T, all.y= T)
+  
+  CE_ery <- merge(CE_ery, A_d7, by= c("V1","V2","V3"), all.x= T, all.y= T)
+  CE_ery <- merge(CE_ery, B_d7, by= c("V1","V2","V3"), all.x= T, all.y= T)
+  CE_ery <- merge(CE_ery, C_d7, by= c("V1","V2","V3"), all.x= T, all.y= T)
+  CE_ery <- merge(CE_ery, D_d7, by= c("V1","V2","V3"), all.x= T, all.y= T)
+  
+  CE_ery <- merge(CE_ery, A_d9, by= c("V1","V2","V3"), all.x= T, all.y= T)
+  CE_ery <- merge(CE_ery, B_d9, by= c("V1","V2","V3"), all.x= T, all.y= T)
+  CE_ery <- merge(CE_ery, C_d9, by= c("V1","V2","V3"), all.x= T, all.y= T)
+  CE_ery <- merge(CE_ery, D_d9, by= c("V1","V2","V3"), all.x= T, all.y= T)
+  
+  CE_ery <- merge(CE_ery, A_d12, by= c("V1","V2","V3"), all.x= T, all.y= T)
+  CE_ery <- merge(CE_ery, B_d12, by= c("V1","V2","V3"), all.x= T, all.y= T)
+  CE_ery <- merge(CE_ery, C_d12, by= c("V1","V2","V3"), all.x= T, all.y= T)
+  CE_ery <- merge(CE_ery, D_d12, by= c("V1","V2","V3"), all.x= T, all.y= T)
+}
+
+head(CE_ery)
+colnames(CE_ery) <- c("Chr","Start","End","A_d0","B_d0","C_d0","D_d0","A_d1","B_d1","C_d1","D_d1",
+                         "A_d2","B_d2","C_d2","D_d2","A_d3","B_d3","C_d3","D_d3",
+                         "A_d4","B_d4","C_d4","D_d4","A_d5","B_d5","C_d5","D_d5",
+                         "A_d6","B_d6","C_d6","D_d6","A_d7","B_d7","C_d7","D_d7",
+                         "A_d9","B_d9","C_d9","D_d9","A_d12","B_d12","C_d12","D_d12")
+dim(CE_ery)
+
+# Making ID 
+CE_ery$ID <- do.call(paste, c(CE_ery[c("Start", "End")], sep = "-"))
+CE_ery$ID <- do.call(paste, c(CE_ery[c("Chr", "ID")], sep = ":"))
+
+
+```
+
+# Creating annotation file
+```{r annotation file}
+#### Creating the annotation file  ####
+{
+  A_d0 <- read.delim('/home/ben/Analysis/circRNA_erys/circErys/CE_hg19/EBL-A-d0-15circ_Annotation.txt',header=F)
+  B_d0 <- read.delim('/home/ben/Analysis/circRNA_erys/circErys/CE_hg19/EBL-B-d0-64circ_Annotation.txt',header=F)
+  C_d0 <- read.delim('/home/ben/Analysis/circRNA_erys/circErys/CE_hg19/EBL-C-d0-3circ_Annotation.txt',header=F)
+  D_d0 <- read.delim('/home/ben/Analysis/circRNA_erys/circErys/CE_hg19/EBL-D-d0-70circ_Annotation.txt',header=F)
+  A_d1 <- read.delim('/home/ben/Analysis/circRNA_erys/circErys/CE_hg19/EBL-A-d1-51circ_Annotation.txt',header=F)
+  B_d1 <- read.delim('/home/ben/Analysis/circRNA_erys/circErys/CE_hg19/EBL-B-d1-80circ_Annotation.txt',header=F)
+  C_d1 <- read.delim('/home/ben/Analysis/circRNA_erys/circErys/CE_hg19/EBL-C-d1-21circ_Annotation.txt',header=F)
+  D_d1 <- read.delim('/home/ben/Analysis/circRNA_erys/circErys/CE_hg19/EBL-D-d1-38circ_Annotation.txt',header=F)
+  A_d2 <- read.delim('/home/ben/Analysis/circRNA_erys/circErys/CE_hg19/EBL-A-d2-54circ_Annotation.txt',header=F)
+  B_d2 <- read.delim('/home/ben/Analysis/circRNA_erys/circErys/CE_hg19/EBL-B-d2-8circ_Annotation.txt',header=F)
+  C_d2 <- read.delim('/home/ben/Analysis/circRNA_erys/circErys/CE_hg19/EBL-C-d2-35circ_Annotation.txt',header=F)
+  D_d2 <- read.delim('/home/ben/Analysis/circRNA_erys/circErys/CE_hg19/EBL-D-d2-25circ_Annotation.txt',header=F)
+  A_d3 <- read.delim('/home/ben/Analysis/circRNA_erys/circErys/CE_hg19/EBL-A-d3-62circ_Annotation.txt',header=F)
+  B_d3 <- read.delim('/home/ben/Analysis/circRNA_erys/circErys/CE_hg19/EBL-B-d3-17circ_Annotation.txt',header=F)
+  C_d3 <- read.delim('/home/ben/Analysis/circRNA_erys/circErys/CE_hg19/EBL-C-d3-60circ_Annotation.txt',header=F)
+  D_d3 <- read.delim('/home/ben/Analysis/circRNA_erys/circErys/CE_hg19/EBL-D-d3-5circ_Annotation.txt',header=F)
+  A_d4 <- read.delim('/home/ben/Analysis/circRNA_erys/circErys/CE_hg19/EBL-A-d4-57circ_Annotation.txt',header=F)
+  B_d4 <- read.delim('/home/ben/Analysis/circRNA_erys/circErys/CE_hg19/EBL-B-d4-75circ_Annotation.txt',header=F)
+  C_d4 <- read.delim('/home/ben/Analysis/circRNA_erys/circErys/CE_hg19/EBL-C-d4-52circ_Annotation.txt',header=F)
+  D_d4 <- read.delim('/home/ben/Analysis/circRNA_erys/circErys/CE_hg19/EBL-D-d4-12circ_Annotation.txt',header=F)
+  A_d5 <- read.delim('/home/ben/Analysis/circRNA_erys/circErys/CE_hg19/EBL-A-d5-66circ_Annotation.txt',header=F)
+  B_d5 <- read.delim('/home/ben/Analysis/circRNA_erys/circErys/CE_hg19/EBL-B-d5-88circ_Annotation.txt',header=F)
+  C_d5 <- read.delim('/home/ben/Analysis/circRNA_erys/circErys/CE_hg19/EBL-C-d5-42circ_Annotation.txt',header=F)
+  D_d5 <- read.delim('/home/ben/Analysis/circRNA_erys/circErys/CE_hg19/EBL-D-d5-84circ_Annotation.txt',header=F)
+  A_d6 <- read.delim('/home/ben/Analysis/circRNA_erys/circErys/CE_hg19/EBL-A-d6-31circ_Annotation.txt',header=F)
+  B_d6 <- read.delim('/home/ben/Analysis/circRNA_erys/circErys/CE_hg19/EBL-B-d6-89circ_Annotation.txt',header=F)
+  C_d6 <- read.delim('/home/ben/Analysis/circRNA_erys/circErys/CE_hg19/EBL-C-d6-34circ_Annotation.txt',header=F)
+  D_d6 <- read.delim('/home/ben/Analysis/circRNA_erys/circErys/CE_hg19/EBL-D-d6-24circ_Annotation.txt',header=F)
+  A_d7 <- read.delim('/home/ben/Analysis/circRNA_erys/circErys/CE_hg19/EBL-A-d7-87circ_Annotation.txt',header=F)
+  B_d7 <- read.delim('/home/ben/Analysis/circRNA_erys/circErys/CE_hg19/EBL-B-d7-46circ_Annotation.txt',header=F)
+  C_d7 <- read.delim('/home/ben/Analysis/circRNA_erys/circErys/CE_hg19/EBL-C-d7-65circ_Annotation.txt',header=F)
+  D_d7 <- read.delim('/home/ben/Analysis/circRNA_erys/circErys/CE_hg19/EBL-D-d7-48circ_Annotation.txt',header=F)
+  A_d9 <- read.delim('/home/ben/Analysis/circRNA_erys/circErys/CE_hg19/EBL-A-d9-72circ_Annotation.txt',header=F)
+  B_d9 <- read.delim('/home/ben/Analysis/circRNA_erys/circErys/CE_hg19/EBL-B-d9-27circ_Annotation.txt',header=F)
+  C_d9 <- read.delim('/home/ben/Analysis/circRNA_erys/circErys/CE_hg19/EBL-C-d9-55circ_Annotation.txt',header=F)
+  D_d9 <- read.delim('/home/ben/Analysis/circRNA_erys/circErys/CE_hg19/EBL-D-d9-69circ_Annotation.txt',header=F)
+  A_d12 <- read.delim('/home/ben/Analysis/circRNA_erys/circErys/CE_hg19/EBL-A-d12-14circ_Annotation.txt',header=F)
+  B_d12 <- read.delim('/home/ben/Analysis/circRNA_erys/circErys/CE_hg19/EBL-B-d12-86circ_Annotation.txt',header=F)
+  C_d12 <- read.delim('/home/ben/Analysis/circRNA_erys/circErys/CE_hg19/EBL-C-d12-79circ_Annotation.txt',header=F)
+  D_d12 <- read.delim('/home/ben/Analysis/circRNA_erys/circErys/CE_hg19/EBL-D-d12-26circ_Annotation.txt',header=F)
+}
+
+CE_Ery_annotation_file <- rbind(
+A_d0,B_d0,C_d0,D_d0,
+A_d1,B_d1,C_d1,D_d1,
+A_d2,B_d2,C_d2,D_d2,
+A_d3,B_d3,C_d3,D_d3,
+A_d4,B_d4,C_d4,D_d4,
+A_d5,B_d5,C_d5,D_d5,
+A_d6,B_d6,C_d6,D_d6,
+A_d7,B_d7,C_d7,D_d7,
+A_d9,B_d9,C_d9,D_d9,
+A_d12,B_d12,C_d12,D_d12)
+
+head(CE_Ery_annotation_file)
+dim(CE_Ery_annotation_file)
+
+CE_Ery_annotation_file$ID <- do.call(paste, c(CE_Ery_annotation_file[c("V2", "V3")], sep = "-"))
+CE_Ery_annotation_file$ID <- do.call(paste, c(CE_Ery_annotation_file[c("V1", "ID")], sep = ":"))
+
+colnames(CE_Ery_annotation_file) <- c("chrom"	,"start",	"end",	"name",	"score",	"strand"	,"thickStart",	"thickEnd"	,"itemRgb",	"exonCount",	"exonSizes",	"exonOffsets",	"readNumber",	"circType",	"geneName"	,"isoformName"	,"index"	,"flankIntron", "ID")
+
+CE_Ery_annotation_file$name <- NULL
+CE_Ery_annotation_file$readNumber <- NULL
+
+CE_Ery_annotation_file <- unique(CE_Ery_annotation_file) 
+
+
+head(CE_Ery_annotation_file)
+dim(CE_Ery_annotation_file)
+
+```
+
+# CE filtering
+```{r CE filtering}
+
+CE_ery[is.na(CE_ery)]=0
+
+## We first filter for low confidence circRNAs (>=2 junction reads per circRNA in >=1 sample) ##
+CE_ery_LC <- NULL
+CE_ery_LC <- subset(CE_ery,
+                  as.numeric(CE_ery$A_d0)>=2 |
+                   as.numeric(CE_ery$B_d0)>=2 |
+                   as.numeric(CE_ery$C_d0)>=2 |
+                   as.numeric(CE_ery$D_d0)>=2|
+                  
+                  as.numeric(CE_ery$A_d1)>=2|
+                   as.numeric(CE_ery$B_d1)>=2|
+                   as.numeric(CE_ery$C_d1)>=2|
+                   as.numeric(CE_ery$D_d1)>=2|
+                  
+                  as.numeric(CE_ery$A_d12)>=2|
+                   as.numeric(CE_ery$B_d12)>=2|
+                   as.numeric(CE_ery$C_d12)>=2|
+                   as.numeric(CE_ery$D_d12)>=2|
+
+                  as.numeric(CE_ery$A_d2)>=2|
+                    as.numeric(CE_ery$B_d2)>=2|
+                    as.numeric(CE_ery$C_d2)>=2|
+                    as.numeric(CE_ery$D_d2)>=2|
+                  
+                  as.numeric(CE_ery$A_d3)>=2|
+                   as.numeric(CE_ery$B_d3)>=2|
+                   as.numeric(CE_ery$C_d3)>=2|
+                   as.numeric(CE_ery$D_d3)>=2|
+
+                  as.numeric(CE_ery$A_d4)>=2|
+                    as.numeric(CE_ery$B_d4)>=2|
+                    as.numeric(CE_ery$C_d4)>=2|
+                    as.numeric(CE_ery$D_d4)>=2|
+                    
+                  as.numeric(CE_ery$A_d5)>=2|
+                   as.numeric(CE_ery$B_d5)>=2|
+                   as.numeric(CE_ery$C_d5)>=2|
+                   as.numeric(CE_ery$D_d5)>=2|
+                  
+                  as.numeric(CE_ery$A_d6)>=2|
+                    as.numeric(CE_ery$B_d6)>=2|
+                    as.numeric(CE_ery$C_d6)>=2|
+                    as.numeric(CE_ery$D_d6)>=2|
+                
+                  as.numeric(CE_ery$A_d7)>=2|
+                   as.numeric(CE_ery$B_d7)>=2|
+                   as.numeric(CE_ery$C_d7)>=2|
+                   as.numeric(CE_ery$D_d7)>=2|
+                  
+                  as.numeric(CE_ery$A_d9)>=2|
+                   as.numeric(CE_ery$B_d9)>=2|
+                   as.numeric(CE_ery$C_d9)>=2|
+                   as.numeric(CE_ery$D_d9)>=2)
+dim(CE_ery_LC) # 21087 circRNAs
+
+
+## We then filter for high confidence circRNAs (>=2 junction reads per circRNA in all samples of a time point) ##
+
+CE_ery_HC <- subset(CE_ery,
+                  (as.numeric(CE_ery$A_d0)>=2&as.numeric(CE_ery$B_d0)>=2&as.numeric(CE_ery$C_d0)>=2&as.numeric(CE_ery$D_d0)>=2)|
+                  
+                  (as.numeric(CE_ery$A_d1)>=2&as.numeric(CE_ery$B_d1)>=2&as.numeric(CE_ery$C_d1)>=2&as.numeric(CE_ery$D_d1)>=2)|
+                  
+                  (as.numeric(CE_ery$A_d12)>=2&as.numeric(CE_ery$B_d12)>=2&as.numeric(CE_ery$C_d12)>=2&as.numeric(CE_ery$D_d12)>=2)|
+                  
+                  (as.numeric(CE_ery$A_d2)>=2&as.numeric(CE_ery$B_d2)>=2&as.numeric(CE_ery$C_d2)>=2&as.numeric(CE_ery$D_d2)>=2)|
+                  
+                  (as.numeric(CE_ery$A_d3)>=2&as.numeric(CE_ery$B_d3)>=2&as.numeric(CE_ery$C_d3)>=2&as.numeric(CE_ery$D_d3)>=2)|
+                  
+                  (as.numeric(CE_ery$A_d4)>=2&as.numeric(CE_ery$B_d4)>=2&as.numeric(CE_ery$C_d4)>=2&as.numeric(CE_ery$D_d4)>=2)|
+                  
+                  (as.numeric(CE_ery$A_d5)>=2&as.numeric(CE_ery$B_d5)>=2&as.numeric(CE_ery$C_d5)>=2&as.numeric(CE_ery$D_d5)>=2)|
+                  
+                  (as.numeric(CE_ery$A_d6)>=2&as.numeric(CE_ery$B_d6)>=2&as.numeric(CE_ery$C_d6)>=2&as.numeric(CE_ery$D_d6)>=2)|
+                  
+                  (as.numeric(CE_ery$A_d7)>=2&as.numeric(CE_ery$B_d7)>=2&as.numeric(CE_ery$C_d7)>=2&as.numeric(CE_ery$D_d7)>=2)|
+                  
+                  (as.numeric(CE_ery$A_d9)>=2&as.numeric(CE_ery$B_d9)>=2&as.numeric(CE_ery$C_d9)>=2&as.numeric(CE_ery$D_d9)>=2))
+dim(CE_ery_HC) # 958 circRNA
+
+
+```
+
+# Combining DCC and CE counts
+```{r Combining DCC and CE counts}
+# CE_ery_HC
+# DCC_ery_HC
+
+## Filtering Low confidence co-detected circRNA by DCC and CE ## 
+DCC_ery_LC$Co_detected[DCC_ery_LC$ID %in% CE_ery_LC$ID] <- "yes" 
+DCC_CE_ery_LC <- subset(DCC_ery_LC,DCC_ery_LC$Co_detected=="yes")
+
+#head(DCC_CE_ery_LC)
+dim(DCC_CE_ery_LC) # 20931 circRNA are co-detected by CE and DCC with high confidence
+
+#write.csv(DCC_CE_ery_LC,"DCC_CE_erys_20931_LC_circRNA.csv")
+
+
+## Filtering High confidence co-detected circRNA by DCC and CE ## 
+DCC_ery_hc$Co_detected[DCC_ery_hc$ID %in% CE_ery_HC$ID] <- "yes"
+DCC_CE_ery_HC <- subset(DCC_ery_hc,DCC_ery_hc$Co_detected=="yes")
+
+#head(DCC_CE_ery_HC)
+dim(DCC_CE_ery_HC) # 950 circRNA are co-detected by CE and DCC with high confidence
+
+#write.csv(DCC_CE_ery_HC,"DCC_CE_erys_950HC_circRNA.csv")
+
+```
+
+
+
+# CircRNA annotation 
+```{r CircRNA annotation}
+
+## Merging annotation with LC count tables ## 
+DCC_CE_ery_LC_annotated <- merge(DCC_CE_ery_LC, CE_Ery_annotation_file, by="ID",all.x = T)
+DCC_CE_ery_LC_annotated <- data.frame(DCC_CE_ery_LC_annotated)
+DCC_CE_ery_LC_annotated <- distinct(DCC_CE_ery_LC_annotated,DCC_CE_ery_LC_annotated$ID,.keep_all = T)
+#head(DCC_CE_ery_LC_annotated)
+dim(DCC_CE_ery_LC_annotated)
+
+## Removing useless columns ## 
+{
+DCC_CE_ery_LC_annotated$itemRgb <- NULL
+DCC_CE_ery_LC_annotated$Co_detected <- NULL
+DCC_CE_ery_LC_annotated$NA. <- NULL
+DCC_CE_ery_LC_annotated$readNumber <- NULL
+DCC_CE_ery_LC_annotated$score <- NULL
+}
+
+## ______________________________________________________________________________ ##
+# Same with HC circRNA #
+
+## Merging annotation with HC count tables ## 
+DCC_CE_ery_HC_annotated <- merge(DCC_CE_ery_HC, CE_Ery_annotation_file, by="ID",all.x = T)
+DCC_CE_ery_HC_annotated <- data.frame(DCC_CE_ery_HC_annotated)
+
+DCC_CE_ery_HC_annotated <- distinct(DCC_CE_ery_HC_annotated,DCC_CE_ery_HC_annotated$ID,.keep_all = T)
+#head(DCC_CE_ery_HC_annotated)
+dim(DCC_CE_ery_HC_annotated)
+
+Ery_HC_BED <- DCC_CE_ery_HC_annotated
+
+## Removing useless columns ## 
+{
+DCC_CE_ery_HC_annotated$itemRgb <- NULL
+DCC_CE_ery_HC_annotated$Co_detected <- NULL
+DCC_CE_ery_HC_annotated$NA. <- NULL
+DCC_CE_ery_HC_annotated$readNumber <- NULL
+DCC_CE_ery_HC_annotated$score <- NULL
+}
+
+
+```
+# BED file prep
+```{r Bed file prep}
+Ery_HC_BED
+
+{
+Ery_HC_BED[2:44] <- NULL
+Ery_HC_BED$circType <- NULL
+Ery_HC_BED$geneName <- NULL
+Ery_HC_BED$isoformName <- NULL
+Ery_HC_BED$index <- NULL
+Ery_HC_BED$flankIntron <- NULL
+Ery_HC_BED$`DCC_CE_ery_HC_annotated$ID` <- NULL
+Ery_HC_BED$score <- 950
+}
+
+Ery_HC_BED <- Ery_HC_BED[c(2:4,1,5:12)] ## Putting the name at its right place for BED file export
+
+#write.table(Ery_HC_BED,"Ery_HC_BED.bed",sep="\t",dec=".",row.names = F,col.names = F,quote = F)
+
+
+```
+
+# CircRNA Specs
+
+## Exon count per circRNA
+* Low confidence circRNA
+```{r Exon count per circRNA}
+
+# LC # 
+mean(DCC_CE_ery_LC_annotated$exonCount,na.rm=T) # 5.580861 exon per circRNA on average
+median(DCC_CE_ery_LC_annotated$exonCount,na.rm = T) # 4 median exon per circRNA on average
+
+ggplot(DCC_CE_ery_LC_annotated, aes(exonCount))+
+  geom_histogram(binwidth = 1,fill="#20639B")+
+  scale_y_continuous(limits = c(0,4000), expand = c(0,0))+
+  scale_x_continuous(limits = c(0,50), expand = c(0,0))+
+  geom_vline(xintercept = 4.17954,color="red")+
+  ggtitle("Low confidence circRNA exon count")+
+  theme_classic()
+```
+
+* High confidence circRNA
+```{r}
+# HC #
+mean(DCC_CE_ery_HC_annotated$exonCount,na.rm=T) # 4.316842 exon per circRNA on average
+median(DCC_CE_ery_HC_annotated$exonCount, na.rm = T) # 4 median exon per circRNA on average
+
+ggplot(DCC_CE_ery_HC_annotated, aes(exonCount))+
+  geom_histogram(binwidth = 1,fill="#20639B")+
+  scale_y_continuous(limits = c(0,250), expand = c(0,0))+
+  scale_x_continuous(limits = c(0,50), expand = c(0,0))+
+  geom_vline(xintercept = 3.392,color="red")+
+  ggtitle("High confidence circRNA exon count")+
+  theme_classic()
+
+```
+
+
+# Putative circRNA size
+* Low confidence circRNA
+```{r Putative circRNA size}
+
+# LC # 
+# Here we compute the spliced length, by adding up all exon sizes (in a string) ##
+DCC_CE_ery_LC_annotated$spliced_length <- mapply(strsplit(as.character(DCC_CE_ery_LC_annotated$exonSizes),","),FUN=function(x){sum(as.numeric(x))})
+
+mean(DCC_CE_ery_LC_annotated$spliced_length,na.rm = T) # 846.1448 nt on average
+median(DCC_CE_ery_LC_annotated$spliced_length,na.rm = T) # 619 nt median
+
+ggplot(DCC_CE_ery_LC_annotated, aes(log10(spliced_length)))+
+  geom_histogram(binwidth = 0.05,fill="#20639B")+ 
+  scale_y_continuous(limits = c(0,1500), expand = c(0,0))+
+  scale_x_continuous(limits = c(1,5), expand = c(0,0))+
+  geom_vline(xintercept = log10(846.1448),color="red")+
+  ggtitle("Low confidence circRNA spliced length")+
+  theme_classic()
+```
+
+* High confidence circRNA
+```{r}
+# HC #
+# Here we compute the spliced length, by adding up all exon sizes (in a string) ##
+DCC_CE_ery_HC_annotated$spliced_length <- mapply(strsplit(as.character(DCC_CE_ery_HC_annotated$exonSizes),","),FUN=function(x){sum(as.numeric(x))})
+
+mean(DCC_CE_ery_HC_annotated$spliced_length) # 690.5463 nt per circRNA on average
+median(DCC_CE_ery_HC_annotated$spliced_length) # 536 nt median exon per circRNA
+
+ggplot(DCC_CE_ery_HC_annotated, aes(log10(spliced_length)))+
+  geom_histogram(binwidth = 0.05,fill="#20639B")+
+  scale_y_continuous(limits = c(0,100), expand = c(0,0))+
+  scale_x_continuous(limits = c(1,5), expand = c(0,0))+
+  geom_vline(xintercept = log10(690.5463),color="red")+
+  ggtitle("High confidence circRNA spliced length")+
+  theme_classic()
+
+```
+
+
+# Start exon usage
+* Low confidence circRNA
+```{r start exon usage}
+
+# LC #
+## Getting the first exon used in each circRNA ##
+DCC_CE_ery_LC_annotated$first_exon <- mapply(strsplit(as.character(DCC_CE_ery_LC_annotated$index),","),FUN=function(x){min(sort(as.numeric(x)))})
+
+ggplot(DCC_CE_ery_LC_annotated, aes(first_exon))+
+  geom_histogram(binwidth = 1, fill="#c69452")+
+  scale_x_continuous(limits = c(0.5,5.5), expand = c(0,0))+
+  scale_y_continuous(limits=c(0,6000), expand = c(0,0))+
+  ggtitle("Start exon usage in LC circRNA")+
+  theme_classic()
+
+dim(subset(DCC_CE_ery_LC_annotated,DCC_CE_ery_LC_annotated$first_exon==2)) # 5344 (25.53151%) LC circRNA are starting at exon 2
+(5344/20931)*100
+
+dim(subset(DCC_CE_ery_LC_annotated,DCC_CE_ery_LC_annotated$first_exon==1)) # 48 circRNA at exon 1
+
+```
+
+* High confidence circRNA
+```{r}
+# HC #
+## Getting the first exon used in each circRNA for high confidence circRNAs ##
+DCC_CE_ery_HC_annotated$first_exon <- mapply(strsplit(as.character(DCC_CE_ery_HC_annotated$index),","),FUN=function(x){min(sort(as.numeric(x)))})
+
+ggplot(DCC_CE_ery_HC_annotated, aes(first_exon))+
+  geom_histogram(binwidth = 1, fill="#c69452")+
+  scale_x_continuous(limits = c(0.5,5.5), expand = c(0,0))+
+  scale_y_continuous(limits=c(0,400), expand = c(0,0))+
+  ggtitle("Start exon usage in HC circRNA")+
+  theme_classic()
+
+dim(subset(DCC_CE_ery_HC_annotated,DCC_CE_ery_HC_annotated$first_exon==2)) # 340 (35.79%) LC circRNA are starting at exon 2
+(340/950)*100
+
+dim(subset(DCC_CE_ery_HC_annotated,DCC_CE_ery_HC_annotated$first_exon==1)) # 0 circRNA at exon 1
+
+```
+
+
+# End exon usage
+* First, low confidence circRNA
+```{r End exon usage}
+
+## Here we want to get the last exon usage. For this we need to get the splicing info of mRNA isoforms ##
+
+# So we import the GTF file to get linear RNA information # 
+hg_19_ref_linear <- read.delim("/Users/stinky/ShareFile/Personal Folders/hg19_ref_all.txt", header = F, sep = "")
+colnames(hg_19_ref_linear) <- c("Gene_name","isoformName","Chrom","Strand","Start","End","Thick_start","Thick_end","exon_number","exon_position","exon_position_2")
+hg_19_ref_linear$exon_position_2 <- NULL
+hg_19_ref_linear$exon_position <- NULL
+#head(hg_19_ref_linear)
+
+
+# LC # 
+## Now comuting the last exon per circRNA in relation to the mRNA splicing ##
+DCC_CE_ery_LC_annotated$last_exon <- mapply(strsplit(as.character(DCC_CE_ery_LC_annotated$index),","),FUN=function(x){max(sort(as.numeric(x)))})
+
+last_exon_calc_LC <- data.frame(DCC_CE_ery_LC_annotated$ID,DCC_CE_ery_LC_annotated$geneName,DCC_CE_ery_LC_annotated$isoformName,DCC_CE_ery_LC_annotated$index,DCC_CE_ery_LC_annotated$first_exon,DCC_CE_ery_LC_annotated$last_exon,DCC_CE_ery_LC_annotated$exonCount)
+colnames(last_exon_calc_LC) <-c("ID","geneName","isoformName","index","first_exon","last_exon","exonCount")
+#head(last_exon_calc_LC)
+
+last_exon_calc_LC <- merge(hg_19_ref_linear,last_exon_calc_LC,by = "isoformName",all.y = T)
+#head(last_exon_calc_LC)
+
+
+last_exon_calc_LC$from_last_exon <- (((last_exon_calc_LC$last_exon)-(last_exon_calc_LC$exon_number)))
+last_exon_calc_LC <- subset(last_exon_calc_LC, last_exon_calc_LC$from_last_exon<=0)
+#head(last_exon_calc_LC)
+
+ggplot(last_exon_calc_LC,aes(x=from_last_exon))+
+  geom_histogram(binwidth = 1, fill="#8a4900",breaks=seq(-200, 0, by =1))+
+  scale_y_continuous(expand = c(0,0), limits = c(0,3000))+
+  scale_x_continuous(expand = c(0,0), limits = c(-6,0))+
+  theme_classic()
+
+dim(subset(last_exon_calc_LC,last_exon_calc_LC$from_last_exon==-1)) # 2859 ( 13.66 % ) LC circRNA
+(2859/20931)*100 # 14.08
+dim(subset(last_exon_calc_LC,last_exon_calc_LC$from_last_exon==0)) # 31 LC circRNA
+
+```
+
+
+* High confidence circRNA
+```{r}
+# Same than above, now for high confidence circRNA # 
+DCC_CE_ery_HC_annotated$last_exon <- mapply(strsplit(as.character(DCC_CE_ery_HC_annotated$index),","),FUN=function(x){max(sort(as.numeric(x)))})
+
+last_exon_calc_HC <- data.frame(DCC_CE_ery_HC_annotated$ID,DCC_CE_ery_HC_annotated$geneName,DCC_CE_ery_HC_annotated$isoformName,DCC_CE_ery_HC_annotated$index,DCC_CE_ery_HC_annotated$first_exon,DCC_CE_ery_HC_annotated$last_exon,DCC_CE_ery_HC_annotated$exonCount)
+colnames(last_exon_calc_HC) <-c("ID","geneName","isoformName","index","first_exon","last_exon","exonCount")
+#head(last_exon_calc_HC)
+
+last_exon_calc_HC <- merge(hg_19_ref_linear,last_exon_calc_HC,by = "isoformName",all.y = T)
+#head(last_exon_calc_HC)
+
+
+last_exon_calc_HC$from_last_exon <- (((last_exon_calc_HC$last_exon)-(last_exon_calc_HC$exon_number)))
+last_exon_calc_HC <- subset(last_exon_calc_HC, last_exon_calc_HC$from_last_exon<=0)
+#head(last_exon_calc_HC)
+
+ggplot(last_exon_calc_HC,aes(x=from_last_exon))+
+  geom_histogram(binwidth = 1, fill="#8a4900",breaks=seq(-200, 0, by =1))+
+  scale_y_continuous(expand = c(0,0), limits = c(0,150))+
+  scale_x_continuous(expand = c(0,0), limits = c(-6,0))+
+  theme_classic()
+
+dim(subset(last_exon_calc_HC,last_exon_calc_HC$from_last_exon==-1)) # 128  (13.47368 %) HC circRNA
+(128/950)*100 
+dim(subset(last_exon_calc_HC,last_exon_calc_HC$from_last_exon==0)) # 0 HC circRNA
+
+```
+
+
+# Chromosomal distribution of circRNA
+* First, low confidence circRNA
+```{r Chromosomal distribution of circRNA}
+## Here we want to know how circRNA-expressin genes are distributed over chromosomes ##
+# LC #
+last_exon_calc_LC$Chr_number <- last_exon_calc_LC$Chrom
+last_exon_calc_LC$Chr_number <- gsub("chr","",last_exon_calc_LC$Chr_number)
+last_exon_calc_LC$Chr_number <- gsub("X","22",last_exon_calc_LC$Chr_number)
+last_exon_calc_LC$Chr_number <- gsub("Y","23",last_exon_calc_LC$Chr_number)
+
+ggplot(last_exon_calc_LC,aes(x=Chr_number))+
+  geom_bar()+
+  theme_classic()+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))+
+  scale_y_continuous(expand = c(0,0), limits = c(0,800))+ 
+  scale_x_discrete(expand = c(0,0), limits = c(1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23))
+```
+
+
+* High confidence circRNA
+```{r echo=TRUE}
+# Same for HC #
+last_exon_calc_HC$Chr_number <- last_exon_calc_HC$Chrom
+last_exon_calc_HC$Chr_number <- gsub("chr","",last_exon_calc_HC$Chr_number)
+last_exon_calc_HC$Chr_number <- gsub("X","22",last_exon_calc_HC$Chr_number)
+last_exon_calc_HC$Chr_number <- gsub("Y","23",last_exon_calc_HC$Chr_number)
+
+ggplot(last_exon_calc_HC,aes(x=Chr_number))+
+  geom_bar()+
+  theme_classic()+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))+
+  scale_y_continuous(expand = c(0,0), limits = c(0,100))+ 
+  scale_x_discrete(expand = c(0,0), limits = c(1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23))
+
+```
+
+
+# Relation position versus length of circRNA
+* First, low confidence circRNA
+```{r Relation position versus length of circRNA}
+## Here we want to know whether the length of a circRNA changes as a function of the first exon usage ##
+# LC #
+ggplot(DCC_CE_ery_LC_annotated, aes(x=first_exon,y=log10(spliced_length)))+
+  geom_boxplot(aes(group=first_exon))+
+  scale_x_continuous(limits = c(0.5,10.5))+
+  scale_y_continuous(limits = c(1,4))+
+  theme_classic()
+```
+
+* High confidence circRNA
+```{r}
+# Same for HC #
+ggplot(DCC_CE_ery_HC_annotated, aes(x=first_exon,y=log10(spliced_length)))+
+  geom_boxplot(aes(group=first_exon))+
+  scale_x_continuous(limits = c(0.5,10.5))+
+  scale_y_continuous(limits = c(1,4))+
+  theme_classic()
+
+
+```
+
+# Sequencing depth correction
+* For low confidence
+```{r library depth correction}
+## Here we correct for the library size of each sample from a vector "v" ##
+## These values are calculated by adding up the unique + multi mapped reads (= all mapped reads) and transform the count to "per million reads" ##
+## This way we get a "reads per million mapped reads" ##
+
+v <- as.vector(c(40231900,38603991,38491082,39217326,30311109,27717793,30778139,27960906,27920112,28660033,24660210,24245821,29574089,28412050,27612347,33581578,32177465,31130189,32997201,30660879,33908484,30431840,28223871,34124115,37218409,31536502,15804898,33205144,32288581,17495527,9281276,10864761,19297421,34838295,33805111,36363220,10856953,5715826,8671834,4359715))
+v
+dim(DCC_CE_ery_LC)
+# LC # 
+DCC_CE_ery_LC_c <- DCC_CE_ery_LC[,4:43]
+DCC_CE_ery_LC_c <- data.frame(mapply('/',DCC_CE_ery_LC_c,v))
+DCC_CE_ery_LC_c <- data.frame(mapply('*',DCC_CE_ery_LC_c,1000000))
+DCC_CE_ery_LC_c <- cbind.data.frame(DCC_CE_ery_LC$ID, DCC_CE_ery_LC_c)
+#head(DCC_CE_ery_LC_c)
+dim(DCC_CE_ery_LC_c)
+DCC_CE_ery_LC_c[is.na(DCC_CE_ery_LC_c)]=0
+colnames(DCC_CE_ery_LC_c) <- c("ID","A_d0","B_d0","C_d0","D_d0","A_d1","B_d1","C_d1","D_d1",
+                         "A_d2","B_d2","C_d2","D_d2","A_d3","B_d3","C_d3","D_d3",
+                         "A_d4","B_d4","C_d4","D_d4","A_d5","B_d5","C_d5","D_d5",
+                         "A_d6","B_d6","C_d6","D_d6","A_d7","B_d7","C_d7","D_d7",
+                         "A_d9","B_d9","C_d9","D_d9","A_d12","B_d12","C_d12","D_d12")
+
+col_fun= colorRamp2(c(-3, -1.5, 0, 1.5, 3), c("#053061","#579EC9","#FFFFFF","#D96651","#67001F"))
+corrplot::corrplot(corr = (cor(DCC_CE_ery_LC_c[2:41])),method = "shade",diag = T,type = "full",
+                   col = col_fun(seq(-8.5,3,by=0.01)), hclust.method = "complete",order = "original",cl.lim=c(0,1) )
+```
+
+* For High confidence
+```{r}
+# Same for HC #
+DCC_CE_ery_HC_c <- DCC_CE_ery_HC[,4:43]
+DCC_CE_ery_HC_c <- data.frame(mapply('/',DCC_CE_ery_HC_c,v))
+DCC_CE_ery_HC_c <- data.frame(mapply('*',DCC_CE_ery_HC_c,1000000))
+DCC_CE_ery_HC_c <- cbind.data.frame(DCC_CE_ery_HC$ID, DCC_CE_ery_HC_c)
+#head(DCC_CE_ery_HC_c)
+dim(DCC_CE_ery_HC_c)
+DCC_CE_ery_HC_c[is.na(DCC_CE_ery_HC_c)]=0
+colnames(DCC_CE_ery_HC_c) <- c("ID","A_d0","B_d0","C_d0","D_d0","A_d1","B_d1","C_d1","D_d1",
+                         "A_d2","B_d2","C_d2","D_d2","A_d3","B_d3","C_d3","D_d3",
+                         "A_d4","B_d4","C_d4","D_d4","A_d5","B_d5","C_d5","D_d5",
+                         "A_d6","B_d6","C_d6","D_d6","A_d7","B_d7","C_d7","D_d7",
+                         "A_d9","B_d9","C_d9","D_d9","A_d12","B_d12","C_d12","D_d12")
+
+col_fun = colorRamp2(c(-3, -1.5, 0, 1.5, 3), c("#053061","#579EC9","#FFFFFF","#D96651","#67001F"))
+
+#col_fun(seq(-2,2,by=0.01))
+pheatmap(DCC_CE_ery_HC_c[2:41], col_fun(seq(-5,5,by=0.01)) ,scale = "row",
+         clustering_distance_cols = "canberra", cluster_cols = F, cluster_rows = T, 
+         border_color = NA, labels_col=colnames(DCC_CE_ery_HC_c[2:41]),fontsize_row=0.1,
+         clustering_distance_rows = "canberra")
+
+col_fun= colorRamp2(c(-3, -1.5, 0, 1.5, 3), c("#053061","#579EC9","#FFFFFF","#D96651","#67001F"))
+corrplot::corrplot(corr = (cor(DCC_CE_ery_HC_c[,2:41])),method = "shade",diag = T,type = "full",
+                   col =col_fun(seq(-8.5,3,by=0.01)),order = "original",cl.lim=c(0,1) )
+
+
+
+```
+```{r correcting lin counts for seq depth}
+## To match the circRNA expression we correct for the library size of the counts of linRNA (at circRNA positions) ##
+v <- as.vector(c(40231900,38603991,38491082,39217326,30311109,27717793,30778139,27960906,27920112,28660033,24660210,24245821,29574089,28412050,27612347,33581578,32177465,31130189,32997201,30660879,33908484,30431840,28223871,34124115,37218409,31536502,15804898,33205144,32288581,17495527,9281276,10864761,19297421,34838295,33805111,36363220,10856953,5715826,8671834,4359715))
+v
+dim(DCC_CE_ery_LC)
+# LC # 
+DCC_ery_lin_c <- DCC_ery_lin[,4:43]
+DCC_ery_lin_c <- data.frame(mapply('/',DCC_ery_lin_c,v))
+DCC_ery_lin_c <- data.frame(mapply('*',DCC_ery_lin_c,1000000))
+DCC_ery_lin_c <- cbind.data.frame(DCC_ery_lin$ID, DCC_ery_lin_c)
+#head(DCC_ery_lin_c)
+dim(DCC_ery_lin_c)
+DCC_ery_lin_c[is.na(DCC_ery_lin_c)]=0
+# colnames(DCC_ery_lin_c) <- c("ID","A_d0","B_d0","C_d0","D_d0","A_d1","B_d1","C_d1","D_d1",
+#                          "A_d2","B_d2","C_d2","D_d2","A_d3","B_d3","C_d3","D_d3",
+#                          "A_d4","B_d4","C_d4","D_d4","A_d5","B_d5","C_d5","D_d5",
+#                          "A_d6","B_d6","C_d6","D_d6","A_d7","B_d7","C_d7","D_d7",
+#                          "A_d9","B_d9","C_d9","D_d9","A_d12","B_d12","C_d12","D_d12")
+
+DCC_ery_lin_c <- DCC_ery_lin_c[DCC_ery_lin_c$`DCC_ery_lin$ID` %in% DCC_CE_ery_LC$ID,]
+
+dim(DCC_ery_lin_c)
+
+
+col_fun= colorRamp2(c(-3, -1.5, 0, 1.5, 3), c("#053061","#579EC9","#FFFFFF","#D96651","#67001F"))
+corrplot::corrplot(corr = (cor(DCC_ery_lin_c[2:41])),method = "shade",diag = T,type = "full",
+                   col = col_fun(seq(-8,3,by=0.01)), hclust.method = "complete",order = "original",cl.lim=c(0,1) )
+
+
+DCC_ery_lin_HC_c <- DCC_ery_lin_c[DCC_ery_lin_c$`DCC_ery_lin$ID` %in% DCC_CE_ery_HC$ID,]
+
+dim(DCC_ery_lin_HC_c)
+
+
+col_fun= colorRamp2(c(-3, -1.5, 0, 1.5, 3), c("#053061","#579EC9","#FFFFFF","#D96651","#67001F"))
+corrplot::corrplot(corr = (cor(DCC_ery_lin_HC_c[2:41])),method = "shade",diag = T,type = "full",
+                   col = col_fun(seq(-8,3,by=0.01)), hclust.method = "complete",order = "original",cl.lim=c(0,1) )
+
+```
+
+```{r k_means heatmap of linRNA in order to match circRNA}
+## Here we want to make 2 heatmaps, ordered per linRNA expression clusters to allow a direct comparison of the level of expression of the lin and the circRNA ## 
+
+set.seed(1894984091)
+k_means_ery <- pheatmap(DCC_ery_lin_HC_c[2:41], col_fun(seq(-5,5,by=0.01)) ,scale = "row",
+         clustering_distance_cols = "canberra", cluster_cols = F, cluster_rows = F, 
+         border_color = NA, labels_col=colnames(DCC_ery_lin_HC_c[2:41]),fontsize_row=5,
+         clustering_distance_rows = "canberra", kmeans_k = 6,clustering_method = "centroid")
+
+
+DCC_ery_lin_HC_c_kmeans <- DCC_ery_lin_HC_c
+DCC_ery_lin_HC_c_kmeans <- cbind(DCC_ery_lin_HC_c_kmeans, k_means_ery$kmeans$cluster)
+#head(DCC_ery_lin_HC_c_kmeans[1:2,1:14])
+
+
+Ery_HC_lin_circ <- merge(DCC_CE_ery_HC_c,DCC_ery_lin_HC_c_kmeans,by.x="ID", by.y="ID", all.x=T)
+dim(Ery_HC_lin_circ)
+
+## Renaming the cluster column ##
+Ery_HC_lin_circ$cluster <- Ery_HC_lin_circ$`k_means_ery$kmeans$cluster`
+Ery_HC_lin_circ$`k_means_ery$kmeans$cluster` <- NULL
+
+Ery_HC_lin_circ <- Ery_HC_lin_circ[order(Ery_HC_lin_circ$cluster, decreasing = F),]
+
+pheatmap(Ery_HC_lin_circ[2:41], col_fun(seq(-5,5,by=0.01)) ,scale = "row",
+         clustering_distance_cols = "canberra", cluster_cols = F, cluster_rows = F, 
+         border_color = NA, labels_col=colnames(Ery_HC_lin_circ[2:41]),fontsize_row=0.1,
+         clustering_distance_rows = "canberra")
+
+pheatmap(Ery_HC_lin_circ[42:81], col_fun(seq(-5,5,by=0.01)) ,scale = "row",
+         clustering_distance_cols = "canberra", cluster_cols = F, cluster_rows = F, 
+         border_color = NA, labels_col=colnames(Ery_HC_lin_circ[42:81]),fontsize_row=0.1,
+         clustering_distance_rows = "canberra")
+
+#write.table(Ery_HC_lin_circ,"/home/ben/Analysis/circRNA_erys/circErys/Ery_lin_circ_corrected_expr_kmeans=6.csv", sep=";", dec=",", row.names = F)
+
+```
+
+
+# PCA
+* PCA LC circRNA
+```{r PCA LC circRNA}
+## Here we calculate the the PCA using low confidence circRNA info ##
+DCC_CE_ery_LC_c_PCA <- DCC_CE_ery_LC_c[2:41]
+{
+gp <- c("d0","d0","d0","d0","d1","d1","d1","d1",
+                         "d2","d2","d2","d2","d3","d3","d3","d3",
+                         "d4","d4","d4","d4","d5","d5","d5","d5",
+                         "d6","d6","d6","d6","d7","d7","d7","d7",
+                         "d9","d9","d9","d9","d12","d12","d12","d12")
+dim(gp)
+PCA_data <- cbind.data.frame(t(DCC_CE_ery_LC_c_PCA[1:40]),gp)
+head(PCA_data)
+dim(PCA_data)
+PCA_data[is.na(PCA_data)]= 0
+PCA <- prcomp(PCA_data[2:20931])
+plot(PCA) 
+}
+
+# Eigenvalues
+eig <- (PCA$sdev)^2
+variance <- eig*100/sum(eig)# Variances in percentage
+cumvar <- cumsum(variance) # Cumulative variances
+eig.decathlon2.active <- data.frame(eig = eig, variance = variance,
+                                    cumvariance = cumvar)
+head(eig.decathlon2.active)
+
+
+### PCA on shared circRNA ### 
+autoplot(prcomp(PCA_data[2:20931]),scale = T, data = PCA_data, colour='gp', size = 2)+
+  theme_classic()+
+  labs(x="PC1 (46.43%)", y ="PC2 (17.5%)") 
+```
+
+* PCA high confidence 
+```{r PCA high confidence}
+# Same for HC HC #
+DCC_CE_ery_HC_c_PCA <- DCC_CE_ery_HC_c[2:41]
+{
+gp <- c("d0","d0","d0","d0","d1","d1","d1","d1",
+                         "d2","d2","d2","d2","d3","d3","d3","d3",
+                         "d4","d4","d4","d4","d5","d5","d5","d5",
+                         "d6","d6","d6","d6","d7","d7","d7","d7",
+                         "d9","d9","d9","d9","d12","d12","d12","d12")
+dim(gp)
+PCA_data <- cbind.data.frame(t(DCC_CE_ery_HC_c_PCA[1:40]),gp)
+head(PCA_data)
+dim(PCA_data)
+PCA_data[is.na(PCA_data)]= 0
+PCA <- prcomp(PCA_data[2:950])
+plot(PCA) 
+}
+
+### PCA on shared circRNA ### 
+autoplot(prcomp(PCA_data[2:950], scale. = T,tol = 0.1,rank. = 2),data=PCA_data, size = 2, colour="gp",variance_percentage = T)+
+  theme_classic()
+
+
+```
+
+# quantifying the increase in circRNA expression
+```{r quantifying the increase in circRNA expression}
+
+# ## day 0 versus day 6, LC circRNA
+# D0_6_LC_expr <- NULL
+# D0_6_LC_expr$day_0 <- rowMeans(DCC_CE_ery_LC_c[2:5]) 
+# D0_6_LC_expr$day_6 <- rowMeans(DCC_CE_ery_LC_c[26:29])
+# D0_6_LC_expr <- data.frame(D0_6_LC_expr)
+# sum(D0_6_LC_expr$day_0) # 57.83849
+# sum(D0_6_LC_expr$day_6) # 219.9499
+# 
+# 219.9499/57.83849 # 3.802829 fold increase at day 6 compared to day 0 in LC circRNAs
+# 
+
+
+## day 0 versus day 5, HC circRNA
+D0_5_HC_expr <- NULL
+D0_5_HC_expr$day_0 <- rowMeans(DCC_CE_ery_HC_c[2:5]) 
+D0_5_HC_expr$day_5 <- rowMeans(DCC_CE_ery_HC_c[22:25])
+D0_5_HC_expr <- data.frame(D0_5_HC_expr)
+sum(D0_5_HC_expr$day_0) # 20.73742
+sum(D0_5_HC_expr$day_5) # 47.48502
+
+47.48502/20.73742 # 2.289823 fold increase at day 5 compared to day 0
+
+
+
+## day 0 versus day 9, HC circRNA
+D0_9_HC_expr <- NULL
+D0_9_HC_expr$day_0 <- rowMeans(DCC_CE_ery_HC_c[2:5]) 
+D0_9_HC_expr$day_9 <- rowMeans(DCC_CE_ery_HC_c[34:37])
+D0_9_HC_expr <- data.frame(D0_9_HC_expr)
+sum(D0_9_HC_expr$day_0) # 20.73742
+sum(D0_9_HC_expr$day_9) # 472.6489
+
+472.6489/20.73742 # 22.79208 fold increase at day 9 compared to day 0
+
+
+# 
+# ## day 5 versus day 9, HC circRNA
+# D5_9_HC_expr <- NULL
+# D5_9_HC_expr$day_5 <- rowMeans(DCC_CE_ery_HC_c[22:25]) 
+# D5_9_HC_expr$day_9 <- rowMeans(DCC_CE_ery_HC_c[34:37])
+# D5_9_HC_expr <- data.frame(D5_9_HC_expr)
+# sum(D5_9_HC_expr$day_5) # 47.48502
+# sum(D5_9_HC_expr$day_9) # 472.6489
+# 
+# 472.6489/47.48502 # 9.953642 fold increase at day 9 compared to day 5
+
+```
+
+
+# CLR calculation on high confidence circRNA
+## CLR day 0
+```{r CLR day 0}
+## Here we compute the circular over-linear ratios for all HC circRNA ##
+
+DCC_ery_lin_HC_c$ID <- DCC_ery_lin_HC_c$`DCC_ery_lin$ID`
+DCC_ery_lin_HC_c$`DCC_ery_lin$ID` <- NULL
+
+DCC_CE_lin_circ_ery_HC <- merge(DCC_CE_ery_HC_c,DCC_ery_lin_HC_c,by="ID")
+dim(DCC_CE_lin_circ_ery_HC) # 950circRNA, all good
+
+#DCC_CE_lin_circ_ery_HC <- distinct(DCC_CE_lin_circ_ery_HC,.keep_all = T)
+
+
+### Day 0 ###
+{
+  D0<- NULL
+  D0$ID <- (DCC_CE_lin_circ_ery_HC$ID)
+  D0$ratio1 <- (((DCC_CE_lin_circ_ery_HC$A_d0)/(DCC_CE_lin_circ_ery_HC$A_d0_lin))) # Making ratios for each biological replicates
+  D0$ratio2 <- (((DCC_CE_lin_circ_ery_HC$B_d0)/(DCC_CE_lin_circ_ery_HC$B_d0_lin)))
+  D0$ratio3 <- (((DCC_CE_lin_circ_ery_HC$C_d0)/(DCC_CE_lin_circ_ery_HC$C_d0_lin)))
+  D0$ratio4 <- (((DCC_CE_lin_circ_ery_HC$D_d0)/(DCC_CE_lin_circ_ery_HC$D_d0_lin)))
+  D0$ratio <- (((D0$ratio1)+(D0$ratio2)+(D0$ratio3)+(D0$ratio4))/4) # average of ratios
+  D0$Lin<- (((DCC_CE_lin_circ_ery_HC$A_d0_lin)+(DCC_CE_lin_circ_ery_HC$B_d0_lin)+(DCC_CE_lin_circ_ery_HC$C_d0_lin)+(DCC_CE_lin_circ_ery_HC$D_d0_lin))/4)
+  D0$circ<- (((DCC_CE_lin_circ_ery_HC$A_d0)+(DCC_CE_lin_circ_ery_HC$B_d0)+(DCC_CE_lin_circ_ery_HC$C_d0)+(DCC_CE_lin_circ_ery_HC$D_d0))/4)
+  D0 <- data.frame(D0)
+  head(D0)
+  D0[is.na(D0)] = 0
+  D0 <- subset(D0, ratio>0)
+  D0 <- merge(D0,CE_Ery_annotation_file, by="ID",all.x=T)
+  D0 <- merge(D0,DCC_CE_ery_HC_c, by="ID",all.x=T)
+  D0$circRPM <- rowMeans(D0[25:28])
+}
+
+
+ggplot(D0, aes(x=log10(circRPM), y=ratio))+
+  geom_point()+
+  geom_point(data=D0[D0$ratio>0.5,],color="grey")+
+  geom_point(data= D0[D0$ratio>1,],color="red")+
+  theme_classic()+
+  ggrepel::geom_text_repel(data=D0[D0$ratio >= 1,], aes(label = geneName), size = 3, min.segment.length = 0.01,force = 10)+
+  labs(y="[ circular / linear ]", x= "log10 [circ RPM ]")+
+  theme(panel.border = element_rect(fill = NA))+
+  geom_hline(yintercept = 1, linetype="dotted")+
+  #geom_vline(xintercept = 0, linetype="dotted")+
+  ylim(0,3)+ 
+  xlim(-2,2)
+
+
+mean(D0$ratio,na.rm = T) # 0.01654357
+```
+## CLR day 1
+```{r CLR day 1}
+### Day 1 ###
+{
+  D1<- NULL
+  D1$ID <- (DCC_CE_lin_circ_ery_HC$ID)
+  D1$ratio1 <- (((DCC_CE_lin_circ_ery_HC$A_d1)/(DCC_CE_lin_circ_ery_HC$A_d1_lin)))
+  D1$ratio2 <- (((DCC_CE_lin_circ_ery_HC$B_d1)/(DCC_CE_lin_circ_ery_HC$B_d1_lin)))
+  D1$ratio3 <- (((DCC_CE_lin_circ_ery_HC$C_d1)/(DCC_CE_lin_circ_ery_HC$C_d1_lin)))
+  D1$ratio4 <- (((DCC_CE_lin_circ_ery_HC$D_d1)/(DCC_CE_lin_circ_ery_HC$D_d1_lin)))
+  D1$ratio <- (((D1$ratio1)+(D1$ratio2)+(D1$ratio3)+(D1$ratio4))/4)
+  D1$Lin<- (((DCC_CE_lin_circ_ery_HC$A_d1_lin)+(DCC_CE_lin_circ_ery_HC$B_d1_lin)+(DCC_CE_lin_circ_ery_HC$C_d1_lin)+(DCC_CE_lin_circ_ery_HC$D_d1_lin))/4)
+  D1$circ<- (((DCC_CE_lin_circ_ery_HC$A_d1)+(DCC_CE_lin_circ_ery_HC$B_d1)+(DCC_CE_lin_circ_ery_HC$C_d1)+(DCC_CE_lin_circ_ery_HC$D_d1))/4)
+  D1 <- data.frame(D1)
+  head(D1)
+  D1[is.na(D1)] = 0
+  D1 <- subset(D1, ratio>0)
+  D1 <- merge(D1,CE_Ery_annotation_file, by="ID",all.x=T)
+  D1 <- merge(D1,DCC_CE_ery_HC_c, by="ID",all.x=T)
+  D1$circRPM <- rowMeans(D1[29:32])
+}
+
+#D1 <- do.call(data.frame,lapply(D1, function(x) replace(x,(x>=5), 5)))
+
+ggplot(D1, aes(x=log10(circRPM), y=ratio))+
+  geom_point()+
+  geom_point(data=D1[D1$ratio>0.5,],color="grey")+
+  geom_point(data= D1[D1$ratio>1,],color="red")+
+  theme_classic()+
+  ggrepel::geom_text_repel(data=D1[D1$ratio >= 1,], aes(label = geneName), size = 3, min.segment.length = 0.01,force = 10)+
+  labs(y="[ circular / linear ]", x= "log10 [circ RPM ]")+
+  theme(panel.border = element_rect(fill = NA))+
+  geom_hline(yintercept = 1, linetype="dotted")+
+  #geom_vline(xintercept = 0, linetype="dotted")+
+  ylim(0,3)+ 
+  xlim(-2,2)
+
+#D1 <- do.call(data.frame,lapply(D1, function(x) replace(x, is.infinite(x),NA)))
+mean(D1$ratio,na.rm = T) # 0.01654357
+```
+
+## CLR day 2
+```{r CLR day 2}
+### Day 2 ###
+{
+  D2<- NULL
+  D2$ID <- (DCC_CE_lin_circ_ery_HC$ID)
+  D2$ratio1 <- (((DCC_CE_lin_circ_ery_HC$A_d2)/(DCC_CE_lin_circ_ery_HC$A_d2_lin)))
+  D2$ratio2 <- (((DCC_CE_lin_circ_ery_HC$B_d2)/(DCC_CE_lin_circ_ery_HC$B_d2_lin)))
+  D2$ratio3 <- (((DCC_CE_lin_circ_ery_HC$C_d2)/(DCC_CE_lin_circ_ery_HC$C_d2_lin)))
+  D2$ratio4 <- (((DCC_CE_lin_circ_ery_HC$D_d2)/(DCC_CE_lin_circ_ery_HC$D_d2_lin)))
+  D2$ratio <- (((D2$ratio1)+(D2$ratio2)+(D2$ratio3)+(D2$ratio4))/4)
+  D2$Lin<- (((DCC_CE_lin_circ_ery_HC$A_d2_lin)+(DCC_CE_lin_circ_ery_HC$B_d2_lin)+(DCC_CE_lin_circ_ery_HC$C_d2_lin)+(DCC_CE_lin_circ_ery_HC$D_d2_lin))/4)
+  D2$circ<- (((DCC_CE_lin_circ_ery_HC$A_d2)+(DCC_CE_lin_circ_ery_HC$B_d2)+(DCC_CE_lin_circ_ery_HC$C_d2)+(DCC_CE_lin_circ_ery_HC$D_d2))/4)
+  D2 <- data.frame(D2)
+  head(D2)
+  D2[is.na(D2)] = 0
+  D2 <- subset(D2, ratio>0)
+  D2 <- merge(D2,CE_Ery_annotation_file, by="ID",all.x=T)
+  D2 <- merge(D2,DCC_CE_ery_HC_c, by="ID",all.x=T)
+  D2$circRPM <- rowMeans(D2[33:36])
+}
+
+#D2 <- do.call(data.frame,lapply(D2, function(x) replace(x,(x>=5), 5)))
+
+ggplot(D2, aes(x=log10(circRPM), y=ratio))+
+  geom_point()+
+  geom_point(data=D2[D2$ratio>0.5,],color="grey")+
+  geom_point(data= D2[D2$ratio>1,],color="red")+
+  theme_classic()+
+  ggrepel::geom_text_repel(data=D2[D2$ratio >= 1,], aes(label = geneName), size = 3, min.segment.length = 0.01,force = 10)+
+  labs(y="[ circular / linear ]", x= "log10 [circ RPM ]")+
+  theme(panel.border = element_rect(fill = NA))+
+  geom_hline(yintercept = 1, linetype="dotted")+
+  #geom_vline(xintercept = 0, linetype="dotted")+
+  ylim(0,3)+ 
+  xlim(-2,2)
+
+#D2 <- do.call(data.frame,lapply(D2, function(x) replace(x, is.infinite(x),NA)))
+mean(D2$ratio,na.rm = T) # 0.01846674
+```
+
+## CLR day 3
+```{r CLR day 3}
+### Day 3 ###
+{
+  D3<- NULL
+  D3$ID <- (DCC_CE_lin_circ_ery_HC$ID)
+  D3$ratio1 <- (((DCC_CE_lin_circ_ery_HC$A_d3)/(DCC_CE_lin_circ_ery_HC$A_d3_lin)))
+  D3$ratio2 <- (((DCC_CE_lin_circ_ery_HC$B_d3)/(DCC_CE_lin_circ_ery_HC$B_d3_lin)))
+  D3$ratio3 <- (((DCC_CE_lin_circ_ery_HC$C_d3)/(DCC_CE_lin_circ_ery_HC$C_d3_lin)))
+  D3$ratio4 <- (((DCC_CE_lin_circ_ery_HC$D_d3)/(DCC_CE_lin_circ_ery_HC$D_d3_lin)))
+  D3$ratio <- (((D3$ratio1)+(D3$ratio2)+(D3$ratio3)+(D3$ratio4))/4)
+  D3$Lin<- (((DCC_CE_lin_circ_ery_HC$A_d3_lin)+(DCC_CE_lin_circ_ery_HC$B_d3_lin)+(DCC_CE_lin_circ_ery_HC$C_d3_lin)+(DCC_CE_lin_circ_ery_HC$D_d3_lin))/4)
+  D3$circ<- (((DCC_CE_lin_circ_ery_HC$A_d3)+(DCC_CE_lin_circ_ery_HC$B_d3)+(DCC_CE_lin_circ_ery_HC$C_d3)+(DCC_CE_lin_circ_ery_HC$D_d3))/4)
+  D3 <- data.frame(D3)
+  #head(D3)
+  D3[is.na(D3)] = 0
+  D3 <- subset(D3, ratio>0)
+  D3 <- merge(D3,CE_Ery_annotation_file, by="ID",all.x=T)
+  D3 <- merge(D3,DCC_CE_ery_HC_c, by="ID",all.x=T)
+  D3$circRPM <- rowMeans(D3[37:40])
+}
+
+#D3 <- do.call(data.frame,lapply(D3, function(x) replace(x,(x>=5), 5)))
+
+ggplot(D3, aes(x=log10(circRPM), y=ratio))+
+  geom_point()+
+  geom_point(data=D3[D3$ratio>0.5,],color="grey")+
+  geom_point(data= D3[D3$ratio>1,],color="red")+
+  theme_classic()+
+  ggrepel::geom_text_repel(data=D3[D3$ratio >= 1,], aes(label = geneName), size = 3, min.segment.length = 0.01,force = 10)+
+  labs(y="[ circular / linear ]", x= "log10 [circ RPM ]")+
+  theme(panel.border = element_rect(fill = NA))+
+  geom_hline(yintercept = 1, linetype="dotted")+
+  #geom_vline(xintercept = 0, linetype="dotted")+
+  ylim(0,3)+ 
+  xlim(-2,2)
+
+
+#D3 <- do.call(data.frame,lapply(D3, function(x) replace(x, is.infinite(x),NA)))
+mean(D3$ratio,na.rm = T) # 0.01846674
+```
+
+## CLR day 4
+```{r CLR day 4}
+### Day 4 ###
+{
+  D4<- NULL
+  D4$ID <- (DCC_CE_lin_circ_ery_HC$ID)
+  D4$ratio1 <- (((DCC_CE_lin_circ_ery_HC$A_d4)/(DCC_CE_lin_circ_ery_HC$A_d4_lin)))
+  D4$ratio2 <- (((DCC_CE_lin_circ_ery_HC$B_d4)/(DCC_CE_lin_circ_ery_HC$B_d4_lin)))
+  D4$ratio3 <- (((DCC_CE_lin_circ_ery_HC$C_d4)/(DCC_CE_lin_circ_ery_HC$C_d4_lin)))
+  D4$ratio4 <- (((DCC_CE_lin_circ_ery_HC$D_d4)/(DCC_CE_lin_circ_ery_HC$D_d4_lin)))
+  D4$ratio <- (((D4$ratio1)+(D4$ratio2)+(D4$ratio3)+(D4$ratio4))/4)
+  D4$Lin<- (((DCC_CE_lin_circ_ery_HC$A_d4_lin)+(DCC_CE_lin_circ_ery_HC$B_d4_lin)+(DCC_CE_lin_circ_ery_HC$C_d4_lin)+(DCC_CE_lin_circ_ery_HC$D_d4_lin))/4)
+  D4$circ<- (((DCC_CE_lin_circ_ery_HC$A_d4)+(DCC_CE_lin_circ_ery_HC$B_d4)+(DCC_CE_lin_circ_ery_HC$C_d4)+(DCC_CE_lin_circ_ery_HC$D_d4))/4)
+  D4 <- data.frame(D4)
+  head(D4)
+  D4[is.na(D4)] = 0
+  D4 <- subset(D4, ratio>0)
+  D4 <- merge(D4,CE_Ery_annotation_file, by="ID",all.x=T)
+  D4 <- merge(D4,DCC_CE_ery_HC_c, by="ID",all.x=T)
+  D4$circRPM <- rowMeans(D4[41:44])
+}
+
+#D4 <- do.call(data.frame,lapply(D4, function(x) replace(x,(x>=5), 5)))
+
+ggplot(D4, aes(x=log10(circRPM), y=ratio))+
+  geom_point()+
+  geom_point(data=D4[D4$ratio>0.5,],color="grey")+
+  geom_point(data= D4[D4$ratio>1,],color="red")+
+  theme_classic()+
+  ggrepel::geom_text_repel(data=D4[D4$ratio >= 1,], aes(label = geneName), size = 3, min.segment.length = 0.01,force = 10)+
+  labs(y="[ circular / linear ]", x= "log10 [circ RPM ]")+
+  theme(panel.border = element_rect(fill = NA))+
+  geom_hline(yintercept = 1, linetype="dotted")+
+  #geom_vline(xintercept = 0, linetype="dotted")+
+  ylim(0,3)+ 
+  xlim(-2,2)
+
+#D4 <- do.call(data.frame,lapply(D4, function(x) replace(x, is.infinite(x),NA)))
+mean(D4$ratio,na.rm = T) # 0.01846674
+```
+
+## CLR day 5
+```{r CLR day 5}
+### Day 5 ###
+{
+  D5<- NULL
+  D5$ID <- (DCC_CE_lin_circ_ery_HC$ID)
+  D5$ratio1 <- (((DCC_CE_lin_circ_ery_HC$A_d5)/(DCC_CE_lin_circ_ery_HC$A_d5_lin)))
+  D5$ratio2 <- (((DCC_CE_lin_circ_ery_HC$B_d5)/(DCC_CE_lin_circ_ery_HC$B_d5_lin)))
+  D5$ratio3 <- (((DCC_CE_lin_circ_ery_HC$C_d5)/(DCC_CE_lin_circ_ery_HC$C_d5_lin)))
+  D5$ratio4 <- (((DCC_CE_lin_circ_ery_HC$D_d5)/(DCC_CE_lin_circ_ery_HC$D_d5_lin)))
+  D5$ratio <- (((D5$ratio1)+(D5$ratio2)+(D5$ratio3)+(D5$ratio4))/4)
+  D5$Lin<- (((DCC_CE_lin_circ_ery_HC$A_d5_lin)+(DCC_CE_lin_circ_ery_HC$B_d5_lin)+(DCC_CE_lin_circ_ery_HC$C_d5_lin)+(DCC_CE_lin_circ_ery_HC$D_d5_lin))/4)
+  D5$circ<- (((DCC_CE_lin_circ_ery_HC$A_d5)+(DCC_CE_lin_circ_ery_HC$B_d5)+(DCC_CE_lin_circ_ery_HC$C_d5)+(DCC_CE_lin_circ_ery_HC$D_d5))/4)
+  D5 <- data.frame(D5)
+  head(D5)
+  D5[is.na(D5)] = 0
+  D5 <- subset(D5, ratio>0)
+  D5 <- merge(D5,CE_Ery_annotation_file, by="ID",all.x=T)
+  D5 <- merge(D5,DCC_CE_ery_HC_c, by="ID",all.x=T)
+  D5$circRPM <- rowMeans(D5[45:48])
+}
+
+#D5 <- do.call(data.frame,lapply(D5, function(x) replace(x,(x>=5), 5)))
+
+ggplot(D5, aes(x=log10(circRPM), y=ratio))+
+  geom_point()+
+  geom_point(data=D5[D5$ratio>0.5,],color="grey")+
+  geom_point(data= D5[D5$ratio>1,],color="red")+
+  theme_classic()+
+  ggrepel::geom_text_repel(data=D5[D5$ratio >= 1,], aes(label = geneName), size = 3, min.segment.length = 0.01,force = 10)+
+  labs(y="[ circular / linear ]", x= "log10 [circ RPM ]")+
+  theme(panel.border = element_rect(fill = NA))+
+  geom_hline(yintercept = 1, linetype="dotted")+
+  #geom_vline(xintercept = 0, linetype="dotted")+
+  ylim(0,3)+ 
+  xlim(-2,2)
+
+#D5 <- do.call(data.frame,lapply(D5, function(x) replace(x, is.infinite(x),NA)))
+mean(D5$ratio,na.rm = T) # 0.02934018
+```
+
+## CLR day 6
+```{r CLR day 6}
+### Day 6 ###
+{
+  D6<- NULL
+  D6$ID <- (DCC_CE_lin_circ_ery_HC$ID)
+  D6$ratio1 <- (((DCC_CE_lin_circ_ery_HC$A_d6)/(DCC_CE_lin_circ_ery_HC$A_d6_lin)))
+  D6$ratio2 <- (((DCC_CE_lin_circ_ery_HC$B_d6)/(DCC_CE_lin_circ_ery_HC$B_d6_lin)))
+  D6$ratio3 <- (((DCC_CE_lin_circ_ery_HC$C_d6)/(DCC_CE_lin_circ_ery_HC$C_d6_lin)))
+  D6$ratio4 <- (((DCC_CE_lin_circ_ery_HC$D_d6)/(DCC_CE_lin_circ_ery_HC$D_d6_lin)))
+  D6$ratio <- (((D6$ratio1)+(D6$ratio2)+(D6$ratio3)+(D6$ratio4))/4)
+  D6$Lin<- (((DCC_CE_lin_circ_ery_HC$A_d6_lin)+(DCC_CE_lin_circ_ery_HC$B_d6_lin)+(DCC_CE_lin_circ_ery_HC$C_d6_lin)+(DCC_CE_lin_circ_ery_HC$D_d6_lin))/4)
+  D6$circ<- (((DCC_CE_lin_circ_ery_HC$A_d6)+(DCC_CE_lin_circ_ery_HC$B_d6)+(DCC_CE_lin_circ_ery_HC$C_d6)+(DCC_CE_lin_circ_ery_HC$D_d6))/4)
+  D6 <- data.frame(D6)
+  head(D6)
+  D6[is.na(D6)] = 0
+  D6 <- subset(D6, ratio>0)
+  D6 <- merge(D6,CE_Ery_annotation_file, by="ID",all.x=T)
+  D6 <- merge(D6,DCC_CE_ery_HC_c, by="ID",all.x=T)
+  D6$circRPM <- rowMeans(D6[49:52])
+}
+
+#D6 <- do.call(data.frame,lapply(D6, function(x) replace(x,(x>=5), 5)))
+
+ggplot(D6, aes(x=log10(circRPM), y=ratio))+
+  geom_point()+
+  geom_point(data=D6[D6$ratio>0.5,],color="grey")+
+  geom_point(data= D6[D6$ratio>1,],color="red")+
+  theme_classic()+
+  ggrepel::geom_text_repel(data=D6[D6$ratio >= 1,], aes(label = geneName), size = 3, min.segment.length = 0.01,force = 10)+
+  labs(y="[ circular / linear ]", x= "log10 [circ RPM ]")+
+  theme(panel.border = element_rect(fill = NA))+
+  geom_hline(yintercept = 1, linetype="dotted")+
+  #geom_vline(xintercept = 0, linetype="dotted")+
+  ylim(0,3)+ 
+  xlim(-2,2)
+
+#D6 <- do.call(data.frame,lapply(D6, function(x) replace(x, is.infinite(x),NA)))
+mean(D6$ratio,na.rm = T) # 0.05304479
+```
+
+## CLR day 7
+```{r CLR day 7}
+### Day 7 ###
+{
+  D7<- NULL
+  D7$ID <- (DCC_CE_lin_circ_ery_HC$ID)
+  D7$ratio1 <- (((DCC_CE_lin_circ_ery_HC$A_d7)/(DCC_CE_lin_circ_ery_HC$A_d7_lin)))
+  D7$ratio2 <- (((DCC_CE_lin_circ_ery_HC$B_d7)/(DCC_CE_lin_circ_ery_HC$B_d7_lin)))
+  D7$ratio3 <- (((DCC_CE_lin_circ_ery_HC$C_d7)/(DCC_CE_lin_circ_ery_HC$C_d7_lin)))
+  D7$ratio4 <- (((DCC_CE_lin_circ_ery_HC$D_d7)/(DCC_CE_lin_circ_ery_HC$D_d7_lin)))
+  D7$ratio <- (((D7$ratio1)+(D7$ratio2)+(D7$ratio3)+(D7$ratio4))/4)
+  D7$Lin<- (((DCC_CE_lin_circ_ery_HC$A_d7_lin)+(DCC_CE_lin_circ_ery_HC$B_d7_lin)+(DCC_CE_lin_circ_ery_HC$C_d7_lin)+(DCC_CE_lin_circ_ery_HC$D_d7_lin))/4)
+  D7$circ<- (((DCC_CE_lin_circ_ery_HC$A_d7)+(DCC_CE_lin_circ_ery_HC$B_d7)+(DCC_CE_lin_circ_ery_HC$C_d7)+(DCC_CE_lin_circ_ery_HC$D_d7))/4)
+  D7 <- data.frame(D7)
+  head(D7)
+  D7[is.na(D7)] = 0
+  D7 <- subset(D7, ratio>0)
+  D7 <- merge(D7,CE_Ery_annotation_file, by="ID",all.x=T)
+  D7 <- merge(D7,DCC_CE_ery_HC_c, by="ID",all.x=T)
+  D7$circRPM <- rowMeans(D7[53:56])
+}
+
+#D7 <- do.call(data.frame,lapply(D7, function(x) replace(x,(x>=5), 5)))
+
+ggplot(D7, aes(x=log10(circRPM), y=ratio))+
+  geom_point()+
+  geom_point(data=D7[D7$ratio>0.5,],color="grey")+
+  geom_point(data= D7[D7$ratio>1,],color="red")+
+  theme_classic()+
+  ggrepel::geom_text_repel(data=D7[D7$ratio >= 1,], aes(label = geneName), size = 3, min.segment.length = 0.01,force = 10)+
+  labs(y="[ circular / linear ]", x= "log10 [circ RPM ]")+
+  theme(panel.border = element_rect(fill = NA))+
+  geom_hline(yintercept = 1, linetype="dotted")+
+  #geom_vline(xintercept = 0, linetype="dotted")+
+  ylim(0,3)+ 
+  xlim(-2,2)
+
+#D7 <- do.call(data.frame,lapply(D7, function(x) replace(x, is.infinite(x),NA)))
+mean(D7$ratio,na.rm = T) # 0.08443632
+```
+
+## CLR day 9
+```{r CLR day 9}
+### Day 9 ###
+{
+  D9<- NULL
+  D9$ID <- (DCC_CE_lin_circ_ery_HC$ID)
+  D9$ratio1 <- (((DCC_CE_lin_circ_ery_HC$A_d9)/(DCC_CE_lin_circ_ery_HC$A_d9_lin)))
+  D9$ratio2 <- (((DCC_CE_lin_circ_ery_HC$B_d9)/(DCC_CE_lin_circ_ery_HC$B_d9_lin)))
+  D9$ratio3 <- (((DCC_CE_lin_circ_ery_HC$C_d9)/(DCC_CE_lin_circ_ery_HC$C_d9_lin)))
+  D9$ratio4 <- (((DCC_CE_lin_circ_ery_HC$D_d9)/(DCC_CE_lin_circ_ery_HC$D_d9_lin)))
+  D9$ratio <- (((D9$ratio1)+(D9$ratio2)+(D9$ratio3)+(D9$ratio4))/4)
+  D9$Lin<- (((DCC_CE_lin_circ_ery_HC$A_d9_lin)+(DCC_CE_lin_circ_ery_HC$B_d9_lin)+(DCC_CE_lin_circ_ery_HC$C_d9_lin)+(DCC_CE_lin_circ_ery_HC$D_d9_lin))/4)
+  D9$circ<- (((DCC_CE_lin_circ_ery_HC$A_d9)+(DCC_CE_lin_circ_ery_HC$B_d9)+(DCC_CE_lin_circ_ery_HC$C_d9)+(DCC_CE_lin_circ_ery_HC$D_d9))/4)
+  D9 <- data.frame(D9)
+  head(D9)
+  D9[is.na(D9)] = 0
+  D9 <- subset(D9, ratio>0)
+  D9 <- merge(D9,CE_Ery_annotation_file, by="ID",all.x=T)
+  D9 <- merge(D9,DCC_CE_ery_HC_c, by="ID",all.x=T)
+  D9$circRPM <- rowMeans(D9[57:60])
+}
+
+#D9 <- do.call(data.frame,lapply(D9, function(x) replace(x,(x>=5), 5)))
+max(D9$circRPM)
+
+
+ggplot(D9, aes(x=log10(circRPM), y=ratio))+
+  geom_point()+
+  geom_point(data=D9[D9$ratio>0.5,],color="grey")+
+  geom_point(data= D9[D9$ratio>1,],color="red")+
+  theme_classic()+
+  ggrepel::geom_text_repel(data=D9[D9$ratio >= 1,], aes(label = geneName), size = 3, min.segment.length = 0.01,force = 10)+
+  labs(y="[ circular / linear ]", x= "log10 [circ RPM ]")+
+  theme(panel.border = element_rect(fill = NA))+
+  geom_hline(yintercept = 1, linetype="dotted")+
+  #geom_vline(xintercept = 0, linetype="dotted")+
+  ylim(0,3)+ 
+  xlim(-2,2)
+
+#D9 <- do.call(data.frame,lapply(D9, function(x) replace(x, is.infinite(x),NA)))
+mean(D9$ratio,na.rm = T) # 0.1210146
+```
+
+## CLR day 12
+```{r CLR day 12}
+### Day 12 ###
+{
+  D12<- NULL
+  D12$ID <- (DCC_CE_lin_circ_ery_HC$ID)
+  D12$ratio1 <- (((DCC_CE_lin_circ_ery_HC$A_d12)/(DCC_CE_lin_circ_ery_HC$A_d12_lin)))
+  D12$ratio2 <- (((DCC_CE_lin_circ_ery_HC$B_d12)/(DCC_CE_lin_circ_ery_HC$B_d12_lin)))
+  D12$ratio3 <- (((DCC_CE_lin_circ_ery_HC$C_d12)/(DCC_CE_lin_circ_ery_HC$C_d12_lin)))
+  D12$ratio4 <- (((DCC_CE_lin_circ_ery_HC$D_d12)/(DCC_CE_lin_circ_ery_HC$D_d12_lin)))
+  D12$ratio <- (((D12$ratio1)+(D12$ratio2)+(D12$ratio3)+(D12$ratio4))/4)
+  D12$Lin<- (((DCC_CE_lin_circ_ery_HC$A_d12_lin)+(DCC_CE_lin_circ_ery_HC$B_d12_lin)+(DCC_CE_lin_circ_ery_HC$C_d12_lin)+(DCC_CE_lin_circ_ery_HC$D_d12_lin))/4)
+  D12$circ<- (((DCC_CE_lin_circ_ery_HC$A_d12)+(DCC_CE_lin_circ_ery_HC$B_d12)+(DCC_CE_lin_circ_ery_HC$C_d12)+(DCC_CE_lin_circ_ery_HC$D_d12))/4)
+  D12 <- data.frame(D12)
+  head(D12)
+  D12[is.na(D12)] = 0
+  D12 <- subset(D12, ratio>0)
+  D12 <- merge(D12,CE_Ery_annotation_file, by="ID",all.x=T)
+  D12 <- merge(D12,DCC_CE_ery_HC_c, by="ID",all.x=T)
+  D12$circRPM <- rowMeans(D12[61:64])
+}
+
+#D12 <- do.call(data.frame,lapply(D12, function(x) replace(x,(x>=5), 5)))
+
+ggplot(D12, aes(x=log10(circRPM), y=ratio))+
+  geom_point()+
+  geom_point(data=D12[D12$ratio>0.5,],color="grey")+
+  geom_point(data= D12[D12$ratio>1,],color="red")+
+  theme_classic()+
+  ggrepel::geom_text_repel(data=D12[D12$ratio >= 1,], aes(label = geneName), size = 3, min.segment.length = 0.01,force = 10)+
+  labs(y="[ circular / linear ]", x= "log10 [circ RPM ]")+
+  theme(panel.border = element_rect(fill = NA))+
+  geom_hline(yintercept = 1, linetype="dotted")+
+  #geom_vline(xintercept = 0, linetype="dotted")+
+  ylim(0,3)+ 
+  xlim(-2,2)
+
+#D12 <- do.call(data.frame,lapply(D12, function(x) replace(x, is.infinite(x),NA)))
+mean(D12$ratio,na.rm = T) # 0.1086598
+```
+
+# Average CLR 
+```{r Average CLR}
+
+## Here we want to follow the CLR throughout differentiation and make a dot (jitter) plot with stats ##
+
+{
+D0_CLR <- data.frame("ID"=D0$ID, "CLR"= D0$ratio, "group"="D0")
+D1_CLR <- data.frame("ID"=D1$ID, "CLR"= D1$ratio, "group"="D1")
+D2_CLR <- data.frame("ID"=D2$ID, "CLR"= D2$ratio, "group"="D2")
+D3_CLR <- data.frame("ID"=D3$ID, "CLR"= D3$ratio, "group"="D3")
+D4_CLR <- data.frame("ID"=D4$ID, "CLR"= D4$ratio, "group"="D4")
+D5_CLR <- data.frame("ID"=D5$ID, "CLR"= D5$ratio, "group"="D5")
+D6_CLR <- data.frame("ID"=D6$ID, "CLR"= D6$ratio, "group"="D6")
+D7_CLR <- data.frame("ID"=D7$ID, "CLR"= D7$ratio, "group"="D7")
+D9_CLR <- data.frame("ID"=D9$ID, "CLR"= D9$ratio, "group"="D9")
+D12_CLR <- data.frame("ID"=D12$ID, "CLR"= D12$ratio, "group"="D12")
+}
+
+
+CLR_avg_for_plot <- rbind.data.frame(D0_CLR,D1_CLR,D2_CLR,D3_CLR,D4_CLR,D5_CLR,D6_CLR,D7_CLR,D9_CLR,D12_CLR)
+
+ggplot(CLR_avg_for_plot, aes(y=log2(CLR),x=group))+
+  geom_point(position = "jitter")+
+  stat_summary(fun = median, fun.min = median, fun.max = median,
+                 geom = "crossbar", width = 0.5, color="red")+
+  theme_classic()
+
+CLR_avg_for_plot <- do.call(data.frame,lapply(CLR_avg_for_plot, function(x) replace(x, is.infinite(x),NA)))  
+CLR_avg_for_plot$CLR <- as.numeric(CLR_avg_for_plot$CLR)
+
+
+t.test(CLR_avg_for_plot$CLR[CLR_avg_for_plot$group=="D0"],CLR_avg_for_plot$CLR[CLR_avg_for_plot$group=="D1"])
+# t = 0.20185, df = 1028.6, p-value = 0.8401
+
+t.test(CLR_avg_for_plot$CLR[CLR_avg_for_plot$group=="D0"],CLR_avg_for_plot$CLR[CLR_avg_for_plot$group=="D2"])
+# t = -0.83945, df = 942.12, p-value = 0.4014
+
+t.test(CLR_avg_for_plot$CLR[CLR_avg_for_plot$group=="D0"],CLR_avg_for_plot$CLR[CLR_avg_for_plot$group=="D3"])
+#t = -1.8589, df = 941.48, p-value = 0.06335
+
+t.test(CLR_avg_for_plot$CLR[CLR_avg_for_plot$group=="D0"],CLR_avg_for_plot$CLR[CLR_avg_for_plot$group=="D4"])
+# t = -2.7722, df = 981.45, p-value = 0.005673
+p.adjust(p=0.005673,n=950, method = "BH") # 1
+
+t.test(CLR_avg_for_plot$CLR[CLR_avg_for_plot$group=="D0"],CLR_avg_for_plot$CLR[CLR_avg_for_plot$group=="D5"])
+# t = -4.854, df = 1207.3, p-value = 1.368e-06
+p.adjust(p=1.368e-06,n=950, method = "BH") # 0.0012996
+
+t.test(CLR_avg_for_plot$CLR[CLR_avg_for_plot$group=="D0"],CLR_avg_for_plot$CLR[CLR_avg_for_plot$group=="D6"])
+# t = -8.4077, df = 1058.5, p-value < 2.2e-16
+p.adjust(p=2.2e-16,n=950, method = "BH") # 2.09e-13
+
+t.test(CLR_avg_for_plot$CLR[CLR_avg_for_plot$group=="D0"],CLR_avg_for_plot$CLR[CLR_avg_for_plot$group=="D7"])
+# t = -9.1147, df = 906.8, p-value < 2.2e-16
+p.adjust(p=2.2e-16,n=950, method = "BH") # 2.09e-13
+
+t.test(CLR_avg_for_plot$CLR[CLR_avg_for_plot$group=="D0"],CLR_avg_for_plot$CLR[CLR_avg_for_plot$group=="D9"])
+# t = -14.44, df = 1012.5, p-value < 2.2e-16
+p.adjust(p=2.2e-16,n=950, method = "BH") # 2.09e-13
+
+t.test(CLR_avg_for_plot$CLR[CLR_avg_for_plot$group=="D0"],CLR_avg_for_plot$CLR[CLR_avg_for_plot$group=="D12"],na.action=NULL)
+# t = -10.99, df = 754.43, p-value < 2.2e-16
+p.adjust(p=2.2e-16,n=950, method = "BH") # 2.09e-13
+
+0.12101458/0.01654357
+
+```
+
+# Exporting CLR values
+```{r Exporting CLR values}
+CLR_ery_forexport <- data.frame(DCC_CE_ery_HC$ID)
+#head(CLR_ery_forexport)
+dim(CLR_ery_forexport)
+colnames(CLR_ery_forexport) <- c("ID")
+
+
+
+{
+D0_CLR <- data.frame("ID"=D0$ID, "CLR_D0"= D0$ratio)
+D1_CLR <- data.frame("ID"=D1$ID, "CLR_D1"= D1$ratio)
+D2_CLR <- data.frame("ID"=D2$ID, "CLR_D2"= D2$ratio)
+D3_CLR <- data.frame("ID"=D3$ID, "CLR_D3"= D3$ratio)
+D4_CLR <- data.frame("ID"=D4$ID, "CLR_D4"= D4$ratio)
+D5_CLR <- data.frame("ID"=D5$ID, "CLR_D5"= D5$ratio)
+D6_CLR <- data.frame("ID"=D6$ID, "CLR_D6"= D6$ratio)
+D7_CLR <- data.frame("ID"=D7$ID, "CLR_D7"= D7$ratio)
+D9_CLR <- data.frame("ID"=D9$ID, "CLR_D9"= D9$ratio)
+D12_CLR <- data.frame("ID"=D12$ID, "CLR_D12"= D12$ratio)
+}
+
+{
+CLR_ery_forexport <- merge(CLR_ery_forexport,D0_CLR,by="ID", all.x = T)
+CLR_ery_forexport <- merge(CLR_ery_forexport,D1_CLR,by="ID", all.x = T)
+CLR_ery_forexport <- merge(CLR_ery_forexport,D2_CLR,by="ID", all.x = T)
+CLR_ery_forexport <- merge(CLR_ery_forexport,D3_CLR,by="ID", all.x = T)
+CLR_ery_forexport <- merge(CLR_ery_forexport,D4_CLR,by="ID", all.x = T)
+CLR_ery_forexport <- merge(CLR_ery_forexport,D5_CLR,by="ID", all.x = T)
+CLR_ery_forexport <- merge(CLR_ery_forexport,D6_CLR,by="ID", all.x = T)
+CLR_ery_forexport <- merge(CLR_ery_forexport,D7_CLR,by="ID", all.x = T)
+CLR_ery_forexport <- merge(CLR_ery_forexport,D9_CLR,by="ID", all.x = T)
+CLR_ery_forexport <- merge(CLR_ery_forexport,D12_CLR,by="ID", all.x = T)
+}
+CLR_ery_forexport[is.na(CLR_ery_forexport)]=0
+CLR_ery_forexport <- ddply(CLR_ery_forexport,"ID", numcolwise(max))
+
+CE_Ery_annotation_file <- CE_Ery_annotation_file[!duplicated(CE_Ery_annotation_file$ID, fromLast=TRUE), ]
+CLR_ery_forexport <- merge(CLR_ery_forexport,CE_Ery_annotation_file,by="ID", all.x = T)
+dim(CLR_ery_forexport)
+
+#write.table(CLR_ery_forexport,"/Users/stinky/Dropbox/circRNA_ery_diff/Analysis/CLR_erys_950HC_circRNA.csv",sep = ";", dec = ",", row.names = F)
+
+```
+
+
+# DE expression of HC circRNA
+```{r DESeq2 prep}
+## Preparing things for differential circRNA expression in Erys using DESeq2 ##
+
+counts_ery <- data.frame(DCC_CE_ery_HC[4:43])
+rownames(counts_ery) <- DCC_CE_ery_HC$ID
+
+## Createing meta data file ##
+{
+colData_ery <- NULL
+colData_ery$Samples <- colnames(counts_ery)
+colData_ery$population <- c("d0","d0","d0","d0","d1","d1","d1","d1",
+                         "d2","d2","d2","d2","d3","d3","d3","d3",
+                         "d4","d4","d4","d4","d5","d5","d5","d5",
+                         "d6","d6","d6","d6","d7","d7","d7","d7",
+                         "d9","d9","d9","d9","d12","d12","d12","d12")
+colData_ery$replicate <- c("A","B","C","D","A","B","C","D",
+                           "A","B","C","D","A","B","C","D",
+                           "A","B","C","D","A","B","C","D",
+                           "A","B","C","D","A","B","C","D",
+                           "A","B","C","D","A","B","C","D")
+colData_ery <- data.frame(colData_ery)
+rownames(colData_ery) <- colData_ery$Samples
+colData_ery$Samples <- NULL
+}
+#head(colData_ery)
+
+all(rownames(colData_ery) %in% colnames(counts_ery))
+all(rownames(colData_ery) == colnames(counts_ery))
+
+```
+
+
+```{r DESeq2}
+set.seed(12345)
+dds_ery <- DESeqDataSetFromMatrix(countData = counts_ery, colData = colData_ery, design = ~ population)
+
+corr_mapped_ery <- c(40231900,38603991,38491082,39217326,30311109,27717793,30778139,27960906,27920112,28660033,24660210,24245821,29574089,28412050,27612347,33581578,32177465,31130189,32997201,30660879,33908484,30431840,28223871,34124115,37218409,31536502,15804898,33205144,32288581,17495527,9281276,10864761,19297421,34838295,33805111,36363220,10856953,5715826,8671834,4359715)
+
+corr_mapped_ery<- corr_mapped_ery/40231900
+
+sizeFactors(dds_ery) <- corr_mapped_ery
+
+dds_ery <- DESeq(dds_ery,fitType = "mean", sfType = "ratio", test="Wald") 
+res_ery <- results(dds_ery, alpha = 0.5)
+
+DESeq2::plotMA(res_ery, ylim=c(-8,8), alpha=0.5)
+
+resultsNames(dds_ery)
+
+
+```
+
+
+
+## Filtering circRNA on p-adj 
+```{r Filtering on P-ADJ}
+set.seed(123455)
+{
+population_d1_vs_d0 <- results(dds_ery, name = "population_d1_vs_d0")
+population_d1_vs_d0 <- data.frame(population_d1_vs_d0)
+population_d1_vs_d0$ID <- rownames(population_d1_vs_d0)
+
+population_d2_vs_d0 <- results(dds_ery, name = "population_d2_vs_d0")
+population_d2_vs_d0 <- data.frame(population_d2_vs_d0)
+population_d2_vs_d0$ID <- rownames(population_d2_vs_d0)
+
+population_d3_vs_d0 <- results(dds_ery, name = "population_d3_vs_d0")
+population_d3_vs_d0 <- data.frame(population_d3_vs_d0)
+population_d3_vs_d0$ID <- rownames(population_d3_vs_d0)
+
+population_d4_vs_d0 <- results(dds_ery, name = "population_d4_vs_d0")
+population_d4_vs_d0 <- data.frame(population_d4_vs_d0)
+population_d4_vs_d0$ID <- rownames(population_d4_vs_d0)
+
+population_d5_vs_d0 <- results(dds_ery, name = "population_d5_vs_d0")
+population_d5_vs_d0 <- data.frame(population_d5_vs_d0)
+population_d5_vs_d0$ID <- rownames(population_d5_vs_d0)
+
+population_d6_vs_d0 <- results(dds_ery, name = "population_d6_vs_d0")
+population_d6_vs_d0 <- data.frame(population_d6_vs_d0)
+population_d6_vs_d0$ID <- rownames(population_d6_vs_d0)
+
+population_d7_vs_d0 <- results(dds_ery, name = "population_d7_vs_d0")
+population_d7_vs_d0 <- data.frame(population_d7_vs_d0)
+population_d7_vs_d0$ID <- rownames(population_d7_vs_d0)
+
+population_d9_vs_d0 <- results(dds_ery, name = "population_d9_vs_d0")
+population_d9_vs_d0 <- data.frame(population_d9_vs_d0)
+population_d9_vs_d0$ID <- rownames(population_d9_vs_d0)
+
+population_d12_vs_d0 <- results(dds_ery, name = "population_d12_vs_d0")
+population_d12_vs_d0 <- data.frame(population_d12_vs_d0)
+population_d12_vs_d0$ID <- rownames(population_d12_vs_d0)
+
+}
+
+DE_ery_padj <- rbind.data.frame(population_d1_vs_d0,population_d2_vs_d0,
+                                population_d2_vs_d0,population_d3_vs_d0,
+                                population_d4_vs_d0,population_d5_vs_d0,
+                                population_d6_vs_d0,population_d7_vs_d0,
+                                population_d9_vs_d0,population_d12_vs_d0)
+DE_ery_padj <- subset(DE_ery_padj,DE_ery_padj$padj<0.05)
+DE_ery_padj <- distinct(DE_ery_padj,ID,.keep_all = T)
+
+dim(DE_ery_padj)
+#head(DE_ery_padj)
+DE_ery_padj$`DE_ery_padj$ID` <- NULL
+
+DE_ery_padj <- merge(DE_ery_padj, CE_Ery_annotation_file, by="ID", all.x=T)
+DE_ery_padj <- data.frame(DE_ery_padj)
+DE_ery_padj <- distinct(DE_ery_padj,ID,.keep_all = T)
+
+DE_ery_padj_RPM <- DCC_CE_ery_HC_c[DCC_CE_ery_HC_c$ID %in% DE_ery_padj$ID,]
+
+dim(DE_ery_padj)
+dim(DE_ery_padj_RPM)
+
+DE_ery_padj_RPM <- merge(DE_ery_padj_RPM, CE_Ery_annotation_file, by="ID")
+DE_ery_padj_RPM <- data.frame(DE_ery_padj_RPM)
+
+
+DE_ery_padj_RPM <- arrange(DE_ery_padj_RPM,desc(A_d0,A_d1,A_d2,A_d3,A_d4,A_d5,A_d6,A_d7))
+
+
+pheatmap(DE_ery_padj_RPM[2:41], col_fun(seq(-3,3,by=0.01)) ,scale = "row",
+         clustering_distance_cols = "canberra", cluster_cols = F, cluster_rows = F, 
+         border_color = NA, labels_col=colnames(DE_ery_padj_RPM[2:41]),fontsize_row=5,
+         clustering_distance_rows = "correlation",show_rownames = F)
+
+## There are 139 DE circRNA !
+
+write.table(DE_ery_padj_RPM, "DE_ery_padj_RPM_22_02_2021.csv", sep=";", dec=",", row.names = F)
+
+```
+
+
+# k_means from DE circRNA
+```{r k_means from DE circRNA}
+set.seed(1894984091)
+k_means_DE_ery <- pheatmap(DE_ery_padj_RPM[2:41], col_fun(seq(-5,5,by=0.01)) ,scale = "row",
+         clustering_distance_cols = "canberra", cluster_cols = F, cluster_rows = T, 
+         border_color = NA, labels_col=colnames(DE_ery_padj_RPM[2:41]),fontsize_row=5,
+         clustering_distance_rows = "maximum", kmeans_k =6, clustering_method = "centroid")
+
+DCC_CE_ery_DE_kmeans <- DE_ery_padj_RPM
+DCC_CE_ery_DE_kmeans <- cbind(DCC_CE_ery_DE_kmeans, k_means_DE_ery$kmeans$cluster)
+
+DCC_CE_ery_DE_kmeans <- DCC_CE_ery_DE_kmeans[order(DCC_CE_ery_DE_kmeans$`k_means_DE_ery$kmeans$cluster`,decreasing = ),]
+
+pheatmap(DCC_CE_ery_DE_kmeans[2:41], col_fun(seq(-5,5,by=0.01)) ,scale = "row",
+         clustering_distance_cols = "canberra", cluster_cols = F, cluster_rows = F, 
+         border_color = NA, labels_col=colnames(DCC_CE_ery_DE_kmeans[2:41]),fontsize_row=0.1)
+
+
+#DCC_CE_ery_DE_kmeans <- merge(DCC_CE_ery_DE_kmeans,CE_Ery_annotation_file, by="ID",all.x=T)
+#write.table(DE_ery_padj_RPM,"DE_HC_ery_padj_RPM_withkmeans_n=4.csv",sep=";",dec=",",row.names = FALSE)
+
+#table(DCC_CE_ery_DE_kmeans$`k_means_DE_ery$kmeans$cluster`)
+```
+
+
+# LFC circ versus LFC lin Day0 vs Day5
+```{r LFC circ versus LFC lin Day0 vs Day5}
+## Here we want to know the log2 fold change of linRNA (at circRNA positions) and circRNA ##
+
+{
+  D0_d5_LFC <- NULL
+  D0_d5_LFC$ID <- (DCC_CE_lin_circ_ery_HC$ID)
+  D0_d5_LFC$avg_circ_D0 <- (DCC_CE_lin_circ_ery_HC$A_d0 + DCC_CE_lin_circ_ery_HC$B_d0+ DCC_CE_lin_circ_ery_HC$C_d0 + DCC_CE_lin_circ_ery_HC$D_d0)/4
+  D0_d5_LFC$log_circ_D0 <- log2(D0_d5_LFC$avg_circ_D0)
+  
+  D0_d5_LFC$avg_circ_d5 <- (DCC_CE_lin_circ_ery_HC$A_d5+ DCC_CE_lin_circ_ery_HC$B_d5+ DCC_CE_lin_circ_ery_HC$C_d5 + DCC_CE_lin_circ_ery_HC$D_d5)/4
+  D0_d5_LFC$log_circ_d5 <- log2(D0_d5_LFC$avg_circ_d5)
+  D0_d5_LFC[is.na(D0_d5_LFC)]=0
+  D0_d5_LFC$LFC_circ <- (D0_d5_LFC$log_circ_d5 - D0_d5_LFC$log_circ_D0)
+  
+  D0_d5_LFC$avg_lin_D0 <- (DCC_CE_lin_circ_ery_HC$A_d0_lin+ DCC_CE_lin_circ_ery_HC$B_d0_lin+ DCC_CE_lin_circ_ery_HC$C_d0_lin + DCC_CE_lin_circ_ery_HC$D_d0_lin)/4
+  D0_d5_LFC$log_lin_D0 <- log2(D0_d5_LFC$avg_lin_D0)
+  
+  D0_d5_LFC$avg_lin_d5 <- (DCC_CE_lin_circ_ery_HC$A_d5_lin+ DCC_CE_lin_circ_ery_HC$B_d5_lin+ DCC_CE_lin_circ_ery_HC$C_d5_lin + DCC_CE_lin_circ_ery_HC$D_d5_lin)/4
+  D0_d5_LFC$log_lin_d5 <- log2(D0_d5_LFC$avg_lin_d5)
+  D0_d5_LFC[is.na(D0_d5_LFC)]=0
+  D0_d5_LFC$LFC_lin <- (D0_d5_LFC$log_lin_d5 - D0_d5_LFC$log_lin_D0)
+
+  D0_d5_LFC <- do.call(data.frame,lapply(D0_d5_LFC, function(x) replace(x, is.infinite(x),NA)))
+  D0_d5_LFC[is.na(D0_d5_LFC)]=NA
+  
+  D0_d5_LFC <- merge(D0_d5_LFC,CE_Ery_annotation_file, by.all="ID")
+  }
+
+
+ggplot(D0_d5_LFC, aes(x=LFC_lin,y=LFC_circ))+
+  geom_point(color="black",alpha=0.5,size=2)+
+  geom_vline(xintercept = 0)+
+  geom_hline(yintercept = 0)+
+  labs(y="LFC circRNA Day6 - Day0", x= "LFC linear RNA Day5 - Day0")+
+  theme_minimal()
+
+ggplot(D0_d5_LFC, aes(x=LFC_lin,y=LFC_circ))+
+  geom_point(size=1,color="#676767", stroke=0)+
+  geom_point(data=D0_d5_LFC[(D0_d5_LFC$LFC_circ >=0.5)&(D0_d5_LFC$LFC_lin <=-0.5),],color="red",size=1, stroke=0)+
+  geom_point(data=D0_d5_LFC[(D0_d5_LFC$LFC_circ >=0.5)&(D0_d5_LFC$LFC_lin >=0.5),],color="#ffa600",size=1, stroke=0)+
+  geom_point(data=D0_d5_LFC[(D0_d5_LFC$LFC_circ <=-0.5)&(D0_d5_LFC$LFC_lin <=-0.5),],color="#ff6361",size=1, stroke=0)+
+  geom_point(data=D0_d5_LFC[(D0_d5_LFC$LFC_lin <=0.5)&(D0_d5_LFC$LFC_lin >=-0.5)&(D0_d5_LFC$LFC_circ <=-0.5),],color="#58508d",size=1, stroke=0)+
+  geom_point(data=D0_d5_LFC[(D0_d5_LFC$LFC_lin <=0.5)&(D0_d5_LFC$LFC_lin >=-0.5)&(D0_d5_LFC$LFC_circ >=0.5),],color="#58508d",size=1, stroke=0)+
+  theme_classic()+
+  labs(y="LFC circular Day0/Day5", x= "LFC linear Day0/Day5")+
+  scale_y_continuous(expand = c(0,0), limits = c(-5,7.5))+ 
+  scale_x_continuous(expand = c(0,0), limits = c(-5,10))+
+  geom_vline(xintercept = 0)+
+  geom_vline(xintercept = 0.5,linetype="dotted")+
+  geom_vline(xintercept = -0.5,linetype="dotted")+
+  geom_hline(yintercept = 0)+
+  geom_hline(yintercept = 0.5,linetype="dotted")+
+  geom_hline(yintercept = -0.5,linetype="dotted")+
+  annotate("text", x = -3, y = -4, label = "1: 10.83%")+
+  annotate("text", x = -3, y = 5, label = "2: 18.31%")+
+  annotate("text", x = 0, y = 5, label = "3: 17.13%")+
+  annotate("text", x = 7.5, y = 5, label = "4: 26.77%")+
+  annotate("text", x = 7.5, y = 0, label = "5: 24.6%")+
+  annotate("text", x = 7.5, y = -4, label = "6: 2.36%")+
+  theme(aspect.ratio = 1)
+
+
+
+dim(D0_d5_LFC[!is.na(D0_d5_LFC$LFC_circ),]) # total 508
+dim(D0_d5_LFC[!is.na(D0_d5_LFC$LFC_circ) & (D0_d5_LFC$LFC_circ <=-0.5)&(D0_d5_LFC$LFC_lin <=-0.5),]) # 55 in group 1
+55/508*100 # 10.82677 %
+
+dim(D0_d5_LFC[!is.na(D0_d5_LFC$LFC_circ) &(D0_d5_LFC$LFC_circ >=0.5)&(D0_d5_LFC$LFC_lin <=-0.5),]) # 93 in group 2
+93/508*100 # 18.30709 %
+
+dim(D0_d5_LFC[!is.na(D0_d5_LFC$LFC_circ) &(D0_d5_LFC$LFC_lin <=0.5)&(D0_d5_LFC$LFC_lin >=-0.5)& (abs(D0_d5_LFC$LFC_circ) >=0.5),]) # 87 in group 3
+87/508*100 #  17.12598 %
+
+dim(D0_d5_LFC[!is.na(D0_d5_LFC$LFC_circ) &(D0_d5_LFC$LFC_circ >=0.5)&(D0_d5_LFC$LFC_lin >=0.5),]) # 136 in group 4
+136/508*100 # 26.77165 %
+
+dim(D0_d5_LFC[!is.na(D0_d5_LFC$LFC_circ) &(D0_d5_LFC$LFC_circ <=-0.5)&(D0_d5_LFC$LFC_lin >=0.5),]) #12 in group 6
+12/508*100 #  2.362205 %
+
+508-55-93-87-136-12 # group 5= 125
+125/508*100 # 24.6063
+
+
+
+### up circ and down lin    versus   up circ and up lin
+t.test(D0_d5_LFC$avg_circ_d5[!is.na(D0_d5_LFC$LFC_circ)&(D0_d5_LFC$LFC_circ >=0.5)&(D0_d5_LFC$LFC_lin <=-0.5)],D0_d5_LFC$avg_circ_d5[!is.na(D0_d5_LFC$LFC_circ)&(D0_d5_LFC$LFC_circ >=0.5)&(D0_d5_LFC$LFC_lin >=0.5)])
+#t = -2.0834, df = 208.47, p-value = 0.03843
+#mean of x mean of y: 0.07929594 0.11896069 
+p.adjust(p=0.03843,n=208.47, method = "BH") #1
+
+### up circ and down lin    versus   up circ and up lin
+t.test(D0_d5_LFC$avg_circ_d5[(D0_d5_LFC$LFC_lin <=0.5)&(D0_d5_LFC$LFC_lin >=-0.5)&(D0_d5_LFC$LFC_circ >=0.5)],D0_d5_LFC$avg_circ_d5[(D0_d5_LFC$LFC_circ >=0.5)&(D0_d5_LFC$LFC_lin >=0.5)])
+# t = -0.1046, df = 172.99, p-value = 0.9168
+# mean of x mean of y:  0.1163986 0.1189607 
+p.adjust(p=0.9168,n=172.99, method = "BH") #1
+
+
+```
+
+
+# group-wise expression
+```{r group-wise expression}
+group_expr_circ_lin <- DCC_CE_ery_HC_c
+
+d0_d5_circ_up_lin_down <- data.frame(D0_d5_LFC[(D0_d5_LFC$LFC_circ >=0.5)&(D0_d5_LFC$LFC_lin <=-0.5),])
+d0_d5_circ_up_lin_up <- data.frame(D0_d5_LFC[(D0_d5_LFC$LFC_circ >=0.5)&(D0_d5_LFC$LFC_lin >=0.5),])
+d0_d5_circ_down_lin_down <- data.frame(D0_d5_LFC[(D0_d5_LFC$LFC_circ <=-0.5)&(D0_d5_LFC$LFC_lin <=-0.5),])
+d0_d5_circ_down_lin_equal <- data.frame(D0_d5_LFC[(D0_d5_LFC$LFC_lin <=0.5)&(D0_d5_LFC$LFC_lin >=-0.5)&(D0_d5_LFC$LFC_circ <=-0.5),])
+d0_d5_circ_up_lin_equal <- data.frame(D0_d5_LFC[(D0_d5_LFC$LFC_lin <=0.5)&(D0_d5_LFC$LFC_lin >=-0.5)&(D0_d5_LFC$LFC_circ >=0.5),])
+
+group_expr_circ_lin$group <- "else"
+group_expr_circ_lin$group[group_expr_circ_lin$ID %in% d0_d5_circ_up_lin_down$ID]="d0_d5_circ_up_lin_down"
+group_expr_circ_lin$group[group_expr_circ_lin$ID %in% d0_d5_circ_up_lin_up$ID]="d0_d5_circ_up_lin_up"
+group_expr_circ_lin$group[group_expr_circ_lin$ID %in% d0_d5_circ_down_lin_down$ID]="d0_d5_circ_down_lin_down"
+#group_expr_circ_lin$group[group_expr_circ_lin$ID %in% d0_d5_circ_down_lin_equal$ID]="d0_d5_circ_down_lin_equal"
+group_expr_circ_lin$group[group_expr_circ_lin$ID %in% d0_d5_circ_up_lin_equal$ID]="d0_d5_circ_up_lin_equal"
+
+group_expr_circ_lin$avg_day6 <- rowMeans(group_expr_circ_lin[,26:29],na.rm = T)
+
+ggplot(group_expr_circ_lin,aes(x=group,y=log2(avg_day6)))+
+  geom_boxplot()+
+  theme_classic()+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+
+
+
+# LFC circ versus LFC lin Day0 vs Day9
+```{r LFC circ versus LFC lin Day0 vs Day9}
+
+{
+  D0_d9_LFC <- NULL
+  D0_d9_LFC$ID <- (DCC_CE_lin_circ_ery_HC$ID)
+  D0_d9_LFC$avg_circ_D0 <- (DCC_CE_lin_circ_ery_HC$A_d0 + DCC_CE_lin_circ_ery_HC$B_d0+ DCC_CE_lin_circ_ery_HC$C_d0 + DCC_CE_lin_circ_ery_HC$D_d0)/4
+  D0_d9_LFC$log_circ_D0 <- log2(D0_d9_LFC$avg_circ_D0)
+  
+  D0_d9_LFC$avg_circ_d9 <- (DCC_CE_lin_circ_ery_HC$A_d9+ DCC_CE_lin_circ_ery_HC$B_d9+ DCC_CE_lin_circ_ery_HC$C_d9 + DCC_CE_lin_circ_ery_HC$D_d9)/4
+  D0_d9_LFC$log_circ_d9 <- log2(D0_d9_LFC$avg_circ_d9)
+  D0_d9_LFC[is.na(D0_d9_LFC)]=0
+  
+  D0_d9_LFC$LFC_circ <- (D0_d9_LFC$log_circ_d9 - D0_d9_LFC$log_circ_D0)
+  
+  D0_d9_LFC$avg_lin_D0 <- (DCC_CE_lin_circ_ery_HC$A_d0_lin+ DCC_CE_lin_circ_ery_HC$B_d0_lin+ DCC_CE_lin_circ_ery_HC$C_d0_lin + DCC_CE_lin_circ_ery_HC$D_d0_lin)/4
+  D0_d9_LFC$log_lin_D0 <- log2(D0_d9_LFC$avg_lin_D0)
+  
+  D0_d9_LFC$avg_lin_d9 <- (DCC_CE_lin_circ_ery_HC$A_d9_lin+ DCC_CE_lin_circ_ery_HC$B_d9_lin+ DCC_CE_lin_circ_ery_HC$C_d9_lin + DCC_CE_lin_circ_ery_HC$D_d9_lin)/4
+  D0_d9_LFC$log_lin_d9 <- log2(D0_d9_LFC$avg_lin_d9)
+  D0_d9_LFC[is.na(D0_d9_LFC)]=0
+  D0_d9_LFC$LFC_lin <- (D0_d9_LFC$log_lin_d9 - D0_d9_LFC$log_lin_D0)
+
+  D0_d9_LFC <- do.call(data.frame,lapply(D0_d9_LFC, function(x) replace(x, is.infinite(x),NA)))
+  D0_d9_LFC[is.na(D0_d9_LFC)]=NA
+  
+  D0_d9_LFC <- merge(D0_d9_LFC,CE_Ery_annotation_file, by.all="ID")
+  }
+
+
+ggplot(D0_d9_LFC, aes(x=LFC_lin,y=LFC_circ))+
+  geom_point(color="black",alpha=0.5,size=2)+
+  geom_vline(xintercept = 0)+
+  geom_hline(yintercept = 0)+
+  labs(y="LFC circRNA Day9 - Day0", x= "LFC linear RNA Day9 - Day0")+
+  theme_minimal()
+
+  
+ggplot(D0_d9_LFC, aes(x=LFC_lin,y=LFC_circ))+
+  geom_point(size=1,color="#676767", stroke=0)+
+  geom_point(data=D0_d9_LFC[(D0_d9_LFC$LFC_circ >=0.5)&(D0_d9_LFC$LFC_lin <=-0.5),],color="red",size=1, stroke=0)+
+  geom_point(data=D0_d9_LFC[(D0_d9_LFC$LFC_circ >=0.5)&(D0_d9_LFC$LFC_lin >=0.5),],color="#ffa600",size=1, stroke=0)+
+  geom_point(data=D0_d9_LFC[(D0_d9_LFC$LFC_circ <=-0.5)&(D0_d9_LFC$LFC_lin <=-0.5),],color="#ff6361",size=1, stroke=0)+
+  geom_point(data=D0_d9_LFC[(D0_d9_LFC$LFC_lin <=0.5)&(D0_d9_LFC$LFC_lin >=-0.5)&(D0_d9_LFC$LFC_circ <=-0.5),],color="#58508d",size=1, stroke=0)+
+  geom_point(data=D0_d9_LFC[(D0_d9_LFC$LFC_lin <=0.5)&(D0_d9_LFC$LFC_lin >=-0.5)&(D0_d9_LFC$LFC_circ >=0.5),],color="#58508d",size=1, stroke=0)+
+  theme_classic()+
+  labs(y="LFC circular Day0/Day9", x= "LFC linear Day0/Day9")+
+  scale_y_continuous(expand = c(0,0), limits = c(-5,10.5))+ 
+  scale_x_continuous(expand = c(0,0), limits = c(-8,10))+
+  geom_vline(xintercept = 0)+
+  geom_vline(xintercept = 0.5,linetype="dotted")+
+  geom_vline(xintercept = -0.5,linetype="dotted")+
+  geom_hline(yintercept = 0)+
+  geom_hline(yintercept = 0.5,linetype="dotted")+
+  geom_hline(yintercept = -0.5,linetype="dotted")+
+  annotate("text", x = -5, y = -4, label = "1: 1.62%")+
+  annotate("text", x = -5, y = 10, label = "2: 31.53%")+
+  annotate("text", x = 0, y = 10, label = "3: 18.56%")+
+  annotate("text", x = 7.5, y = 10, label = "4: 47.03%")+
+  annotate("text", x = 7.5, y = 0, label = "5: 1.26%")+
+  annotate("text", x = 7.5, y = -4, label = "6: 0%")+
+  theme(aspect.ratio = 1)
+
+
+dim(D0_d9_LFC[!is.na(D0_d9_LFC$LFC_circ),]) # total 555
+dim(D0_d9_LFC[!is.na(D0_d9_LFC$LFC_circ) & (D0_d9_LFC$LFC_circ <=-0.5)&(D0_d9_LFC$LFC_lin <=-0.5),]) # 9 in group 1
+9/555*100 # 1.621622
+
+dim(D0_d9_LFC[!is.na(D0_d9_LFC$LFC_circ) &(D0_d9_LFC$LFC_circ >=0.5)&(D0_d9_LFC$LFC_lin <=-0.5),]) # 175 in group 2
+175/555*100 # 31.53153
+
+dim(D0_d9_LFC[!is.na(D0_d9_LFC$LFC_circ) &(D0_d9_LFC$LFC_lin <=0.5)&(D0_d9_LFC$LFC_lin >=-0.5)& (abs(D0_d9_LFC$LFC_circ) >=0.5),]) # 103 in group 3
+103/555*100 # 18.55856
+
+dim(D0_d9_LFC[!is.na(D0_d9_LFC$LFC_circ) &(D0_d9_LFC$LFC_circ >=0.5)&(D0_d9_LFC$LFC_lin >=0.5),]) # 261 in group 4
+261/555*100 # 47.02703
+
+555-9-175-103-261 # group 5= 7
+7/555*100 # 1.261261
+
+
+
+t.test(D0_d9_LFC$avg_circ_d9[!is.na(D0_d9_LFC$LFC_circ) &(D0_d9_LFC$LFC_circ >=0.5)&(D0_d9_LFC$LFC_lin <=-0.5)], D0_d9_LFC$avg_circ_d9[!is.na(D0_d9_LFC$LFC_circ) &(D0_d9_LFC$LFC_circ >=0.5)&(D0_d9_LFC$LFC_lin >=0.5)])
+# t = -5.9943, df = 286.21, p-value = 6.139e-09
+p.adjust(p=6.139e-09,n=286.21, method = "BH") # 1.757043e-06
+ 
+25.46317/11.70327 # 2.175731 fold lower
+
+t.test(D0_d9_LFC$avg_circ_d9[!is.na(D0_d9_LFC$LFC_circ) &(D0_d9_LFC$LFC_circ >=0.5)&(D0_d9_LFC$LFC_lin <=-0.5)], D0_d9_LFC$avg_circ_d9[!is.na(D0_d9_LFC$LFC_circ) & (D0_d9_LFC$LFC_lin <=0.5)&(D0_d9_LFC$LFC_lin >=-0.5)& (abs(D0_d9_LFC$LFC_circ) >=0.5)])
+# t = -2.3903, df = 115.06, p-value = 0.01846
+p.adjust(p=0.01846,n=115.06, method = "BH") # 1
+
+
+ggplot(D0_d9_LFC, aes(x=LFC_lin,y=LFC_circ))+
+  geom_point(color="black",alpha=0.3,size=2)+
+  geom_vline(xintercept = 0)+
+  geom_hline(yintercept = 0)+
+  geom_smooth(method = lm)+
+  scale_y_continuous(expand = c(0,0), limits = c(-5,10))+ 
+  scale_x_continuous(expand = c(0,0), limits = c(-8,10))+
+  labs(y="LFC circRNA Day9 - Day0", x= "LFC linear RNA Day9 - Day0")+
+  theme_minimal()
+
+lm(D0_d9_LFC$LFC_circ~D0_d9_LFC$LFC_lin)
+
+
+max(D0_d9_LFC$LFC_circ,na.rm = T)-min(D0_d9_LFC$LFC_circ,na.rm = T) # 13.76829
+max(D0_d9_LFC$LFC_lin,na.rm = T)-min(D0_d9_LFC$LFC_lin,na.rm = T) # 16.31359
+
+
+mean(D0_d9_LFC$avg_circ_D0,na.rm = T) # 0.02176557
+mean(D0_d9_LFC$avg_circ_d9,na.rm = T) # 0.4963845
+
+mean(D0_d9_LFC$avg_circ_d9,na.rm = T) - mean(D0_d9_LFC$avg_circ_D0,na.rm = T) #  0.4746189
+
+```
+
+# group-wise expression
+```{r group-wise expression}
+group_expr_circ_lin_d9 <- DCC_CE_ery_HC_c
+
+d0_d9_circ_up_lin_down <- data.frame(D0_d9_LFC[(D0_d9_LFC$LFC_circ >=0.5)&(D0_d9_LFC$LFC_lin <=-0.5),])
+d0_d9_circ_up_lin_up <- data.frame(D0_d9_LFC[(D0_d9_LFC$LFC_circ >=0.5)&(D0_d9_LFC$LFC_lin >=0.5),])
+d0_d9_circ_down_lin_down <- data.frame(D0_d9_LFC[(D0_d9_LFC$LFC_circ <=-0.5)&(D0_d9_LFC$LFC_lin <=-0.5),])
+d0_d9_circ_down_lin_equal <- data.frame(D0_d9_LFC[(D0_d9_LFC$LFC_lin <=0.5)&(D0_d9_LFC$LFC_lin >=-0.5)&(D0_d9_LFC$LFC_circ <=-0.5),])
+d0_d9_circ_up_lin_equal <- data.frame(D0_d9_LFC[(D0_d9_LFC$LFC_lin <=0.5)&(D0_d9_LFC$LFC_lin >=-0.5)&(D0_d9_LFC$LFC_circ >=0.5),])
+
+group_expr_circ_lin_d9$group <- "else"
+group_expr_circ_lin_d9$group[group_expr_circ_lin_d9$ID %in% d0_d9_circ_up_lin_down$ID]="d0_d9_circ_up_lin_down"
+group_expr_circ_lin_d9$group[group_expr_circ_lin_d9$ID %in% d0_d9_circ_up_lin_up$ID]="d0_d9_circ_up_lin_up"
+group_expr_circ_lin_d9$group[group_expr_circ_lin_d9$ID %in% d0_d9_circ_down_lin_down$ID]="d0_d9_circ_down_lin_down"
+#group_expr_circ_lin_d9$group[group_expr_circ_lin_d9$ID %in% d0_d9_circ_down_lin_equal$ID]="d0_d9_circ_down_lin_equal"
+group_expr_circ_lin_d9$group[group_expr_circ_lin_d9$ID %in% d0_d9_circ_up_lin_equal$ID]="d0_d9_circ_up_lin_equal"
+
+group_expr_circ_lin_d9$avg_day9 <- rowMeans(group_expr_circ_lin_d9[,34:37],na.rm = T)
+
+ggplot(group_expr_circ_lin_d9,aes(x=group,y=log2(avg_day9)))+
+  geom_boxplot()+
+  theme_classic()+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+
+
+
+```
+
+
+## Number of circRNA variants by day LC
+```{r Number of circRNA variants by day LC}
+#DCC_CE_ery_LC
+dim(distinct(DCC_CE_ery_LC_annotated,geneName))
+dim(subset(DCC_CE_ery_LC,
+           DCC_CE_ery_LC$A_d0>=2| 
+           DCC_CE_ery_LC$B_d0>=2| 
+           DCC_CE_ery_LC$C_d0>=2| 
+           DCC_CE_ery_LC$D_d0>=2)) # 1118
+
+dim(subset(DCC_CE_ery_LC,
+           DCC_CE_ery_LC$A_d1>=2| 
+           DCC_CE_ery_LC$B_d1>=2| 
+           DCC_CE_ery_LC$C_d1>=2| 
+           DCC_CE_ery_LC$D_d1>=2)) # 725
+
+dim(subset(DCC_CE_ery_LC,
+           DCC_CE_ery_LC$A_d2>=2| 
+           DCC_CE_ery_LC$B_d2>=2| 
+           DCC_CE_ery_LC$C_d2>=2| 
+           DCC_CE_ery_LC$D_d2>=2)) # 693
+
+dim(subset(DCC_CE_ery_LC,
+           DCC_CE_ery_LC$A_d3>=2| 
+           DCC_CE_ery_LC$B_d3>=2| 
+           DCC_CE_ery_LC$C_d3>=2| 
+           DCC_CE_ery_LC$D_d3>=2)) # 1005
+
+dim(subset(DCC_CE_ery_LC,
+           DCC_CE_ery_LC$A_d4>=2| 
+           DCC_CE_ery_LC$B_d4>=2| 
+           DCC_CE_ery_LC$C_d4>=2| 
+           DCC_CE_ery_LC$D_d4>=2)) # 1142
+
+dim(subset(DCC_CE_ery_LC,
+           DCC_CE_ery_LC$A_d5>=2| 
+           DCC_CE_ery_LC$B_d5>=2| 
+           DCC_CE_ery_LC$C_d5>=2| 
+           DCC_CE_ery_LC$D_d5>=2)) # 1409
+
+dim(subset(DCC_CE_ery_LC,
+           DCC_CE_ery_LC$A_d6>=2| 
+           DCC_CE_ery_LC$B_d6>=2| 
+           DCC_CE_ery_LC$C_d6>=2| 
+           DCC_CE_ery_LC$D_d6>=2)) # 4056
+
+dim(subset(DCC_CE_ery_LC,
+           DCC_CE_ery_LC$A_d7>=2| 
+           DCC_CE_ery_LC$B_d7>=2| 
+           DCC_CE_ery_LC$C_d7>=2| 
+           DCC_CE_ery_LC$D_d7>=2)) # 6384
+
+dim(subset(DCC_CE_ery_LC,
+           DCC_CE_ery_LC$A_d9>=2| 
+           DCC_CE_ery_LC$B_d9>=2| 
+           DCC_CE_ery_LC$C_d9>=2| 
+           DCC_CE_ery_LC$D_d9>=2)) # 14006
+
+dim(subset(DCC_CE_ery_LC,
+           DCC_CE_ery_LC$A_d12>=2| 
+           DCC_CE_ery_LC$B_d12>=2| 
+           DCC_CE_ery_LC$C_d12>=2| 
+           DCC_CE_ery_LC$D_d12>=2)) # 4967
+
+
+```
+
+
+
+## Number of circRNA variants by day LC
+```{r Number of circRNA variants by day LC}
+#DCC_CE_ery_LC
+dim(distinct(DCC_CE_ery_LC_annotated,geneName))
+dim(subset(DCC_CE_ery_LC,
+           DCC_CE_ery_LC$A_d0>2 &
+           DCC_CE_ery_LC$B_d0>2 &
+           DCC_CE_ery_LC$C_d0>2 &
+           DCC_CE_ery_LC$D_d0>2)) # 32
+
+dim(subset(DCC_CE_ery_LC,
+           DCC_CE_ery_LC$A_d1>2 &
+           DCC_CE_ery_LC$B_d1>2 &
+           DCC_CE_ery_LC$C_d1>2 &
+           DCC_CE_ery_LC$D_d1>2)) # 19
+
+dim(subset(DCC_CE_ery_LC,
+           DCC_CE_ery_LC$A_d2>2 &
+           DCC_CE_ery_LC$B_d2>2 &
+           DCC_CE_ery_LC$C_d2>2 &
+           DCC_CE_ery_LC$D_d2>2)) # 13
+
+dim(subset(DCC_CE_ery_LC,
+           DCC_CE_ery_LC$A_d3>2 &
+           DCC_CE_ery_LC$B_d3>2 &
+           DCC_CE_ery_LC$C_d3>2 &
+           DCC_CE_ery_LC$D_d3>2)) # 24
+
+dim(subset(DCC_CE_ery_LC,
+           DCC_CE_ery_LC$A_d4>2 &
+           DCC_CE_ery_LC$B_d4>2 &
+           DCC_CE_ery_LC$C_d4>2 &
+           DCC_CE_ery_LC$D_d4>2)) # 39
+
+dim(subset(DCC_CE_ery_LC,
+           DCC_CE_ery_LC$A_d5>2 &
+           DCC_CE_ery_LC$B_d5>2 &
+           DCC_CE_ery_LC$C_d5>2 &
+           DCC_CE_ery_LC$D_d5>2)) # 69
+
+dim(subset(DCC_CE_ery_LC,
+           DCC_CE_ery_LC$A_d6>2 &
+           DCC_CE_ery_LC$B_d6>2 &
+           DCC_CE_ery_LC$C_d6>2 &
+           DCC_CE_ery_LC$D_d6>2)) # 100
+
+dim(subset(DCC_CE_ery_LC,
+           DCC_CE_ery_LC$A_d7>2 &
+           DCC_CE_ery_LC$B_d7>2 &
+           DCC_CE_ery_LC$C_d7>2 &
+           DCC_CE_ery_LC$D_d7>2)) # 116
+
+dim(subset(DCC_CE_ery_LC,
+           DCC_CE_ery_LC$A_d9>2 &
+           DCC_CE_ery_LC$B_d9>2 &
+           DCC_CE_ery_LC$C_d9>2 &
+           DCC_CE_ery_LC$D_d9>2)) # 652
+
+dim(subset(DCC_CE_ery_LC,
+           DCC_CE_ery_LC$A_d12>2 &
+           DCC_CE_ery_LC$B_d12>2 &
+           DCC_CE_ery_LC$C_d12>2 &
+           DCC_CE_ery_LC$D_d12>2)) #65
+
+652/32
+
+
+```
+
+
+
+
+# ORF predictions in Erys
+```{r ORF prediction}
+## In this part we want to analyze the putative ORF of circRNA and compared to those of linRNA ##
+## The ORFs were computed by ORFfinder (NCBI) see paper's methods ##
+
+Erys_HC_ORF_tripled <- read.delim("/Users/stinky/Desktop/cORF_prediction/Ery/ORFfinder_Ery_output_tripled",header = F,sep="\t")
+head(Erys_HC_ORF_tripled)
+
+
+Erys_HC_ORF_tripled$V1 <- gsub(">lcl\\
+                               ","",Erys_HC_ORF_tripled$V1)
+
+Erys_HC_ORF_tripled$ID <- word(Erys_HC_ORF_tripled$V1,2,sep="_")
+Erys_HC_ORF_tripled$ID <- word(Erys_HC_ORF_tripled$ID,1,sep="\\):")
+Erys_HC_ORF_tripled$ID <- gsub("\\(\\+","",Erys_HC_ORF_tripled$ID)
+Erys_HC_ORF_tripled$ID <- gsub("\\(\\-","",Erys_HC_ORF_tripled$ID)
+
+Erys_HC_ORF_tripled$ID
+
+Erys_HC_ORF_tripled$length <- mapply(strsplit(as.character(Erys_HC_ORF_tripled$V2),","),FUN=function(x){nchar(x)})
+max(Erys_HC_ORF_tripled$length)
+
+Erys_HC_ORF_tripled$group <- "triple"
+
+ggplot(Erys_HC_ORF_tripled,aes(log2(length)))+
+  geom_histogram(binwidth = 0.1)
+
+dim(distinct(Erys_HC_ORF_tripled,ID))
+dim(distinct(Erys_HC_ORF_tripled,V2)) # 3948
+dim(Erys_HC_ORF_tripled)
+mean(Erys_HC_ORF_tripled$length)
+median(Erys_HC_ORF_tripled$length)
+
+
+
+Erys_HC_ORF_once <- read.delim("/Users/stinky/Desktop/cORF_prediction/Ery/ORFfinder_Ery_output_once",header = F,sep="\t")
+head(Erys_HC_ORF_once)
+
+
+Erys_HC_ORF_once$V1 <- gsub(">lcl\\
+                            ","",Erys_HC_ORF_once$V1)
+
+Erys_HC_ORF_once$ID <- word(Erys_HC_ORF_once$V1,2,sep="_")
+Erys_HC_ORF_once$ID <- word(Erys_HC_ORF_once$ID,1,sep="\\):")
+Erys_HC_ORF_once$ID <- gsub("\\(\\+","",Erys_HC_ORF_once$ID)
+Erys_HC_ORF_once$ID <- gsub("\\(\\-","",Erys_HC_ORF_once$ID)
+
+Erys_HC_ORF_once$ID
+
+Erys_HC_ORF_once$length <- mapply(strsplit(as.character(Erys_HC_ORF_once$V2),","),FUN=function(x){nchar(x)})
+max(Erys_HC_ORF_once$length)
+
+Erys_HC_ORF_once$group <- "once"
+
+ggplot(Erys_HC_ORF_once,aes(log2(length)))+
+  geom_histogram(binwidth = 0.1)
+
+dim(distinct(Erys_HC_ORF_once,ID))
+dim(distinct(Erys_HC_ORF_once,V2))
+dim(Erys_HC_ORF_once)
+mean(Erys_HC_ORF_once$length)
+median(Erys_HC_ORF_once$length)
+
+ORF_for_plot <- rbind.data.frame(Erys_HC_ORF_once,Erys_HC_ORF_tripled)
+dim(ORF_for_plot)
+
+ggplot(ORF_for_plot,aes((length),fill=group))+
+  geom_histogram(binwidth = 1)
+
+
+```
+
+
+## Graphing lin+cir and circ specific unique ORF
+```{r Graphing lin+cir and circ specific unique ORF }
+ORF_triple_specific <- subset(Erys_HC_ORF_tripled,!(Erys_HC_ORF_tripled$V2 %in% Erys_HC_ORF_once$V2))
+dim(ORF_triple_specific)
+dim(distinct(ORF_triple_specific,V2))
+mean(ORF_triple_specific$length)
+median(ORF_triple_specific$length)
+
+
+Erys_HC_ORF_tripled <- distinct(Erys_HC_ORF_tripled,V2,.keep_all = T)
+
+
+ggplot(Erys_HC_ORF_tripled,aes(log2(length),fill=group))+
+  geom_histogram(binwidth = 0.1,alpha=0.9)+
+  geom_histogram(data=Erys_HC_ORF_once,binwidth = 0.1,alpha=0.9)+
+  theme_classic()+
+  scale_y_continuous(expand = c(0,0))+
+  scale_x_continuous(expand = c(0,0))
+
+dim(distinct(Erys_HC_ORF_once[Erys_HC_ORF_tripled$V2 %in% Erys_HC_ORF_once$V2,],ID)) # 810 circRNA had lin + circ ORFs 
+dim(distinct(Erys_HC_ORF_once[!Erys_HC_ORF_tripled$V2 %in% Erys_HC_ORF_once$V2,],ID)) # 639 circRNA had circ-specific ORFs 
+639/950*100 # 67.26316 %
+
+dim(Erys_HC_ORF_once[!Erys_HC_ORF_tripled$V2 %in% Erys_HC_ORF_once$V2,]) # 1864 ORFs in 
+
+
+ORF_triple_specific <- distinct(ORF_triple_specific,V2,.keep_all = T)
+Erys_HC_ORF_once <- distinct(Erys_HC_ORF_once,V2,.keep_all = T)
+
+linear_ORF <- Erys_HC_ORF_once[Erys_HC_ORF_tripled$V2 %in% Erys_HC_ORF_once$V2,]
+linear_ORF <- distinct(linear_ORF,V2,.keep_all = T)
+dim(distinct(linear_ORF,V2))
+dim(linear_ORF)
+mean(linear_ORF$length,na.rm=T)
+median(linear_ORF$length,na.rm=T)
+
+ggplot(ORF_triple_specific,aes(log2(length),fill=group))+
+  geom_histogram(data=linear_ORF[Erys_HC_ORF_tripled$V2 %in% linear_ORF$V2,],binwidth = 0.1,alpha=0.7)+
+  geom_histogram(binwidth = 0.1,alpha=0.7)+
+  theme_classic()+
+  scale_y_continuous(expand = c(0,0))+
+  scale_x_continuous(expand = c(0,0))
+
+t.test(ORF_triple_specific$length,
+       linear_ORF$length)
+# t = 15.107, df = 1829.4, p-value < 2.2e-16
+# mean of x = 188.69282  
+mean of y = 75.40578
+
+p.adjust(p=2.2e-16,n=1829.4) # 4.02468e-13
+
+
+combined_specific_plot <- rbind.data.frame(ORF_triple_specific,linear_ORF)
+combined_specific_plot[is.na(combined_specific_plot)]=""
+
+table(combined_specific_plot$group)
+
+
+
+
+
+```
+
