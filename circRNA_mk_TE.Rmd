@@ -1,0 +1,2203 @@
+---
+title: "CircRNA expression and function in Megakaryocytes and platelets"
+author: "Benoit P Nicolet"
+date: "09/03/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(plyr)
+library(dplyr)
+library(pheatmap)
+library(ggplot2)
+library(RColorBrewer)
+library(colorRamps)
+library(devtools)
+library(ggfortify)
+library(reshape)
+library(circlize)
+library(biomaRt)
+library(DESeq2)
+library(stringr)
+
+knitr::opts_knit$set("/home/ben/Analysis/circRNA_erys/circMK/")
+
+```
+
+
+# importing circRNA counts from DCC
+```{r DCC circ import}
+
+# DCC_MK is the DCC circRNA detection file
+# DCC_MK_lin is the DCC linRNA detection file
+
+### importing DCC circRNA counts ###
+
+# DCC_MK <- read.delim('/.../Personal Folders/circRNA_ery_diff/MK_diff/DCC/CircRNACount',header=T)
+# 
+# # DCC start sites are always 1nt after CE... Here I correct for that. Also make the ID column
+# DCC_MK$Start <- as.numeric(DCC_MK$Start -1) 
+# 
+# # Making circRNA ID format (Chr:Start-End)
+# DCC_MK$ID <- do.call(paste, c(DCC_MK[c("Start", "End")], sep = "-"))
+# DCC_MK$ID <- do.call(paste, c(DCC_MK[c("Chr", "ID")], sep = ":"))
+# 
+# #head(DCC_MK)
+# 
+# # Remove circRNA from mitochondria #
+# dim(DCC_MK)
+# DCC_MK <- subset(DCC_MK, Chr != "chrM")
+# dim(DCC_MK)
+# 
+# # Make an ordered file for the rest of the analysis #
+# DCC_MK <- data.frame("ID"=DCC_MK$ID,
+#                      "CD42neg_1"=DCC_MK$C1MK42negChimeric.out.junction,"CD42neg_2"=DCC_MK$C2MK42negChimeric.out.junction,
+#                      "CD42neg_3"=DCC_MK$C3MK42negChimeric.out.junction,
+#                      "CD42pos_1"=DCC_MK$C1MK42posChimeric.out.junction,"CD42pos_2"=DCC_MK$C2MK42posChimeric.out.junction,
+#                      "CD42pos_3"=DCC_MK$C3MK42posChimeric.out.junction)
+# 
+# head(DCC_MK)
+# dim(DCC_MK)
+# 
+# # Combine duplicate counts using IDs #
+# DCC_MK <- ddply(DCC_MK, "ID", numcolwise(sum)) 
+# dim(DCC_MK)
+# 
+# write.table(DCC_MK,"DCC_counts_MK_filtered_with_ID.csv",sep = ";",dec = ",",row.names = F)
+# 
+
+## To simplify the procedure, I stored the results of the above code in a file, and only re-import the file:  ##
+
+DCC_MK <- read.delim("/home/ben/Analysis/circRNA_erys/circMK/DCC_counts_MK_filtered_with_ID.csv",sep = ";",dec = ",")
+# head(DCC_MK)
+```
+
+
+###importing DCC linear RNA counts                          
+```{r DCC lin import}   
+
+# #DCC_MK_lin <- read.delim('/Users/.../Dropbox/circRNA/CircRNA_in_T-cell/R_stuff/Linear_counts_DCC_MK_diff_filtered.csv',header=T,sep=";")
+# #head(DCC_MK_lin) # The linear count positions are already corrected for the -1 of DCC 
+# 
+# DCC_MK_lin <- read.delim('/Users/.../ShareFile/Personal Folders/circRNA_ery_diff/MK_diff/DCC/LinearCount',header=T)
+# 
+# # DCC start sites are always 1nt after CE... Here I correct for that. Also make ID
+# DCC_MK_lin$Start <- as.numeric(DCC_MK_lin$Start -1)
+# 
+# # Making circRNA ID format (Chr:Start-End)
+# DCC_MK_lin$ID <- do.call(paste, c(DCC_MK_lin[c("Start", "End")], sep = "-"))
+# DCC_MK_lin$ID <- do.call(paste, c(DCC_MK_lin[c("Chr", "ID")], sep = ":"))
+# 
+# head(DCC_MK_lin)
+# 
+# 
+# DCC_MK_lin <- data.frame("ID"=DCC_MK_lin$ID,
+#                      "CD42neg_1_lin"=DCC_MK_lin$C1MK42negChimeric.out.junction,"CD42neg_2_lin"=DCC_MK_lin$C2MK42negChimeric.out.junction,
+#                      "CD42neg_3_lin"=DCC_MK_lin$C3MK42negChimeric.out.junction,
+#                      "CD42pos_1_lin"=DCC_MK_lin$C1MK42posChimeric.out.junction,"CD42pos_2_lin"=DCC_MK_lin$C2MK42posChimeric.out.junction,
+#                      "CD42pos_3_lin"=DCC_MK_lin$C3MK42posChimeric.out.junction)
+# 
+# 
+# head(DCC_MK_lin)
+# dim(DCC_MK_lin)
+# 
+# # Combine duplicate counts using IDs #
+# DCC_MK_lin <- ddply(DCC_MK_lin, "ID", numcolwise(sum))
+# dim(DCC_MK_lin)
+# 
+# write.table(DCC_MK_lin,"Linear_counts_DCC_MK_filtered.csv",sep = ";",dec=",",row.names = F)
+
+## To simplify the procedure, I stored the results of the above code in a file, and only re-import the file:  ##
+
+DCC_MK_lin <- read.delim("/home/ben/Analysis/circRNA_erys/circMK/Linear_counts_DCC_MK_filtered.csv",sep = ";",dec = ",")
+#head(DCC_MK_lin)
+```
+
+# DCC circRNA filtering
+```{r DCC circRNA filtering}
+#DCC_MK
+#DCC_MK_LC is the low-confidence filtered circRNA
+
+
+DCC_MK_LC <- NULL
+DCC_MK_LC <- subset(DCC_MK, (as.numeric(DCC_MK$CD42neg_1)>=2|as.numeric(DCC_MK$CD42neg_2)>=2|as.numeric(DCC_MK$CD42neg_3)>=2|
+  (as.numeric(DCC_MK$CD42pos_1)>=2|as.numeric(DCC_MK$CD42pos_2)>=2|as.numeric(DCC_MK$CD42pos_3)>=2)))
+
+dim(DCC_MK_LC) # 30981 circRNA
+DCC_MK_LC[is.na(DCC_MK_LC)]=0
+
+
+#DCC_MK_hc is the high confidence filtered circRNA
+DCC_MK_hc <- subset(DCC_MK, (as.numeric(DCC_MK$CD42neg_1)>=2 & as.numeric(DCC_MK$CD42neg_2)>=2 & as.numeric(DCC_MK$CD42neg_3)>=2|
+  (as.numeric(DCC_MK$CD42pos_1)>=2 & as.numeric(DCC_MK$CD42pos_2)>=2 & as.numeric(DCC_MK$CD42pos_3)>=2)))
+
+dim(DCC_MK_hc) # 4198 circRNA
+DCC_MK_hc[is.na(DCC_MK_hc)]=0
+```
+
+
+
+# CE import
+```{r CE circ counts import}
+
+## Importing circ counts from CE ##
+CD42neg_1 <- read.delim('/home/ben/Analysis/circRNA_erys/circMK/circRNA_CE2/C1MK42negcirc_Annotation.txt',header=F)
+CD42neg_2 <- read.delim('/home/ben/Analysis/circRNA_erys/circMK/circRNA_CE2/C2MK42negcirc_Annotation.txt',header=F)
+CD42neg_3 <- read.delim('/home/ben/Analysis/circRNA_erys/circMK/circRNA_CE2/C3MK42negcirc_Annotation.txt',header=F)
+  
+CD42pos_1 <- read.delim('/home/ben/Analysis/circRNA_erys/circMK/circRNA_CE2/C1MK42poscirc_Annotation.txt',header=F)
+CD42pos_2 <- read.delim('/home/ben/Analysis/circRNA_erys/circMK/circRNA_CE2/C2MK42poscirc_Annotation.txt',header=F)
+CD42pos_3 <- read.delim('/home/ben/Analysis/circRNA_erys/circMK/circRNA_CE2/C3MK42poscirc_Annotation.txt',header=F)
+
+## Checking size ## 
+dim(CD42neg_1)
+dim(CD42neg_2)
+dim(CD42neg_3)
+
+dim(CD42pos_1)
+dim(CD42pos_2)
+dim(CD42pos_3)
+
+
+## Making IDs ##
+CD42neg_1$ID <- do.call(paste, c(CD42neg_1[c("V2", "V3")], sep = "-"))
+CD42neg_1$ID <- do.call(paste, c(CD42neg_1[c("V1", "ID")], sep = ":"))
+
+CD42neg_2$ID <- do.call(paste, c(CD42neg_2[c("V2", "V3")], sep = "-"))
+CD42neg_2$ID <- do.call(paste, c(CD42neg_2[c("V1", "ID")], sep = ":"))
+
+CD42neg_3$ID <- do.call(paste, c(CD42neg_3[c("V2", "V3")], sep = "-"))
+CD42neg_3$ID <- do.call(paste, c(CD42neg_3[c("V1", "ID")], sep = ":"))
+
+
+
+CD42pos_1$ID <- do.call(paste, c(CD42pos_1[c("V2", "V3")], sep = "-"))
+CD42pos_1$ID <- do.call(paste, c(CD42pos_1[c("V1", "ID")], sep = ":"))
+
+CD42pos_2$ID <- do.call(paste, c(CD42pos_2[c("V2", "V3")], sep = "-"))
+CD42pos_2$ID <- do.call(paste, c(CD42pos_2[c("V1", "ID")], sep = ":"))
+
+CD42pos_3$ID <- do.call(paste, c(CD42pos_3[c("V2", "V3")], sep = "-"))
+CD42pos_3$ID <- do.call(paste, c(CD42pos_3[c("V1", "ID")], sep = ":"))
+
+
+
+## Reducing the data frame to ID + counts ##
+CD42neg_1 <- data.frame("ID"=CD42neg_1$ID, "CD42neg_1"=CD42neg_1$V13)
+CD42neg_2 <- data.frame("ID"=CD42neg_2$ID, "CD42neg_2"=CD42neg_2$V13)
+CD42neg_3 <- data.frame("ID"=CD42neg_3$ID, "CD42neg_3"=CD42neg_3$V13)
+
+CD42pos_1 <- data.frame("ID"=CD42pos_1$ID, "CD42pos_1"=CD42pos_1$V13)
+CD42pos_2 <- data.frame("ID"=CD42pos_2$ID, "CD42pos_2"=CD42pos_2$V13)
+CD42pos_3 <- data.frame("ID"=CD42pos_3$ID, "CD42pos_3"=CD42pos_3$V13)
+
+## merging things togehter ##
+CE_MK <- NULL
+CE_MK <- merge(CD42neg_1, CD42neg_2, by= "ID", all.x= T, all.y= T)
+CE_MK <- merge(CE_MK, CD42neg_3, by= "ID", all.x= T, all.y= T)
+CE_MK <- merge(CE_MK, CD42pos_1, by= "ID", all.x= T, all.y= T)
+CE_MK <- merge(CE_MK, CD42pos_2, by= "ID", all.x= T, all.y= T)
+CE_MK <- merge(CE_MK, CD42pos_3, by= "ID", all.x= T, all.y= T)
+
+dim(CE_MK)
+
+
+```
+
+# Creating annotation file
+```{r annotation file}
+## creating an annotation file ##
+{
+  CD42neg_1 <- read.delim('/home/ben/Analysis/circRNA_erys/circMK/circRNA_CE2/C1MK42negcirc_Annotation.txt',header=F)
+  CD42neg_2 <- read.delim('/home/ben/Analysis/circRNA_erys/circMK/circRNA_CE2/C2MK42negcirc_Annotation.txt',header=F)
+  CD42neg_3 <- read.delim('/home/ben/Analysis/circRNA_erys/circMK/circRNA_CE2/C3MK42negcirc_Annotation.txt',header=F)
+  
+  CD42pos_1 <- read.delim('/home/ben/Analysis/circRNA_erys/circMK/circRNA_CE2/C1MK42poscirc_Annotation.txt',header=F)
+  CD42pos_2 <- read.delim('/home/ben/Analysis/circRNA_erys/circMK/circRNA_CE2/C2MK42poscirc_Annotation.txt',header=F)
+  CD42pos_3 <- read.delim('/home/ben/Analysis/circRNA_erys/circMK/circRNA_CE2/C3MK42poscirc_Annotation.txt',header=F)
+}
+
+## combining all annotation together ##
+CE_MK_annotation_file <- rbind(CD42neg_1,CD42neg_2,CD42neg_3,
+                                CD42pos_1,CD42pos_2,CD42pos_3)
+
+dim(CE_MK_annotation_file)
+
+## Making an ID column ##
+CE_MK_annotation_file$ID <- do.call(paste, c(CE_MK_annotation_file[c("V2", "V3")], sep = "-"))
+CE_MK_annotation_file$ID <- do.call(paste, c(CE_MK_annotation_file[c("V1", "ID")], sep = ":"))
+
+## Naming columns ##
+colnames(CE_MK_annotation_file) <- c("chrom"	,"start",	"end",	"name",	"score",	"strand"	,"thickStart",	"thickEnd"	,"itemRgb",	"exonCount",	"exonSizes",	"exonOffsets",	"readNumber",	"circType",	"geneName"	,"isoformName"	,"index"	,"flankIntron", "ID")
+
+CE_MK_annotation_file$name <- NULL
+CE_MK_annotation_file$readNumber <- NULL
+
+## making sure we have only unique annotations ##
+CE_MK_annotation_file <- unique(CE_MK_annotation_file) 
+
+
+#head(CE_MK_annotation_file)
+dim(CE_MK_annotation_file)
+
+```
+
+# CE filtering
+```{r CE filtering}
+
+## Here we filter for circRNAs using CE counts ## 
+
+## Low confidence (LC) circRNA first ## 
+CE_MK[is.na(CE_MK)]=0
+
+CE_MK_LC <- NULL
+
+CE_MK_LC <- subset(CE_MK, (as.numeric(CE_MK$CD42neg_1)>=2|as.numeric(CE_MK$CD42neg_2)>=2|as.numeric(CE_MK$CD42neg_3)>=2|
+  (as.numeric(CE_MK$CD42pos_1)>=2|as.numeric(CE_MK$CD42pos_2)>=2|as.numeric(CE_MK$CD42pos_3)>=2)))
+
+dim(CE_MK_LC) # 12879 circRNA
+CE_MK_LC[is.na(CE_MK_LC)]=0
+
+
+## High confidence (HC) circRNAs ## 
+CE_MK_HC <- NULL
+
+CE_MK_HC <- base::subset(CE_MK, (CE_MK$CD42neg_1>=2 & CE_MK$CD42neg_2>=2 & CE_MK$CD42neg_3>=2)|
+  (CE_MK$CD42pos_1>=2 & CE_MK$CD42pos_2>=2 & CE_MK$CD42pos_3>=2))
+
+dim(CE_MK_HC) # 2539
+
+
+```
+
+# Combining DCC and CE counts
+```{r Combining DCC and CE counts}
+
+## Filtering Low confidence co-detected circRNA by DCC and CE ## 
+DCC_MK_LC$Co_detected[DCC_MK_LC$ID %in% CE_MK_LC$ID] <- "yes" 
+DCC_CE_MK_LC <- subset(DCC_MK_LC,DCC_MK_LC$Co_detected=="yes")
+
+dim(DCC_CE_MK_LC) # 12809 circRNA are co-detected by CE and DCC with high confidence
+
+
+## Filtering High confidence co-detected circRNA by DCC and CE ## 
+DCC_MK_hc$Co_detected [DCC_MK_hc$ID %in% CE_MK_HC$ID] <- "yes"
+DCC_CE_MK_HC <- subset(DCC_MK_hc,DCC_MK_hc$Co_detected=="yes")
+
+dim(DCC_CE_MK_HC) # 2531 circRNA are co-detected by CE and DCC with high confidence
+
+```
+
+
+# CircRNA annotation 
+```{r CircRNA annotation}
+
+## Merging annotation with LC count tables ## 
+DCC_CE_MK_LC_annotated <- merge(DCC_CE_MK_LC, CE_MK_annotation_file, by="ID",all.x = T)
+DCC_CE_MK_LC_annotated <- data.frame(DCC_CE_MK_LC_annotated)
+dim(DCC_CE_MK_LC_annotated)
+
+## Removing useless columns ## 
+{
+DCC_CE_MK_LC_annotated$itemRgb <- NULL
+DCC_CE_MK_LC_annotated$Co_detected <- NULL
+DCC_CE_MK_LC_annotated$NA. <- NULL
+DCC_CE_MK_LC_annotated$readNumber <- NULL
+DCC_CE_MK_LC_annotated$score <- NULL
+}
+
+DCC_CE_MK_LC_annotated <- DCC_CE_MK_LC_annotated[!duplicated(DCC_CE_MK_LC_annotated$ID),]
+
+write.table(DCC_CE_MK_LC_annotated,"DCC_CE_MK_LC_annotated.csv",sep=";",dec=",",row.names = F)
+
+
+
+## ______________________________________________________________________________ ##
+# Same with HC circRNA #
+
+## Merging annotation with HC count tables ## 
+DCC_CE_MK_HC_annotated <- merge(DCC_CE_MK_HC, CE_MK_annotation_file, by="ID",all.x = T)
+DCC_CE_MK_HC_annotated <- data.frame(DCC_CE_MK_HC_annotated)
+dim(DCC_CE_MK_HC_annotated)
+
+## Removing useless columns ## 
+{
+DCC_CE_MK_HC_annotated$Co_detected <- NULL
+DCC_CE_MK_HC_annotated$NA. <- NULL
+DCC_CE_MK_HC_annotated$readNumber <- NULL
+}
+
+write.table(DCC_CE_MK_HC_annotated,"DCC_CE_MK_HC_annotated.csv",sep=";",dec=",",row.names = F)
+
+
+## Here I make a BED file ## 
+## The BED file is needing to get the circRNA sequence in downstream analysis ##
+
+DCC_CE_MK_HC_annotated_BED <- DCC_CE_MK_HC_annotated
+{
+DCC_CE_MK_HC_annotated_BED$CD42neg_1 <- NULL
+DCC_CE_MK_HC_annotated_BED$CD42neg_2 <- NULL
+DCC_CE_MK_HC_annotated_BED$CD42neg_3 <- NULL
+DCC_CE_MK_HC_annotated_BED$CD42pos_1 <- NULL
+DCC_CE_MK_HC_annotated_BED$CD42pos_2 <- NULL
+DCC_CE_MK_HC_annotated_BED$CD42pos_3 <- NULL
+DCC_CE_MK_HC_annotated_BED$circType <- NULL
+DCC_CE_MK_HC_annotated_BED$geneName <- NULL
+DCC_CE_MK_HC_annotated_BED$isoformName <- NULL
+DCC_CE_MK_HC_annotated_BED$index <- NULL
+DCC_CE_MK_HC_annotated_BED$flankIntron <- NULL
+DCC_CE_MK_HC_annotated_BED$score <- 950
+}
+
+DCC_CE_MK_HC_annotated_BED <- DCC_CE_MK_HC_annotated_BED[c(2:4,1,5:12)] ## Putting the name at its right place for BED export! 
+
+write.table(DCC_CE_MK_HC_annotated_BED,"DCC_CE_MK_HC_BED.bed",sep="\t",dec=".",row.names = F,col.names = F,quote = F)
+
+  
+```
+ 
+ 
+ ## CircRNA counts per pop and gene-circRNA
+```{r circRNA counts per pop and gene circRNA} 
+
+## how many LC circRNA are expressed in : ##
+
+## CD42- MK ##
+dim(subset(DCC_CE_MK_LC_annotated,
+     DCC_CE_MK_LC_annotated$CD42neg_1>=2 |
+     DCC_CE_MK_LC_annotated$CD42neg_2>=2 |
+     DCC_CE_MK_LC_annotated$CD42neg_3>=2)) # 7972
+
+## CD42+ MK ##
+dim(subset(DCC_CE_MK_LC_annotated,
+     DCC_CE_MK_LC_annotated$CD42pos_1>=2 |
+     DCC_CE_MK_LC_annotated$CD42pos_2>=2 |
+     DCC_CE_MK_LC_annotated$CD42pos_3>=2)) # 11070
+ 
+## how many genes express LC circRNA in : ##
+
+## CD42- MK ##
+neg <- subset(DCC_CE_MK_LC_annotated,
+     DCC_CE_MK_LC_annotated$CD42neg_1>=2 |
+     DCC_CE_MK_LC_annotated$CD42neg_2>=2 |
+     DCC_CE_MK_LC_annotated$CD42neg_3>=2) ##
+dim(distinct(neg,geneName)) # 3341
+
+## CD42+ MK ##
+pos <- subset(DCC_CE_MK_LC_annotated,
+     DCC_CE_MK_LC_annotated$CD42pos_1>=2 |
+     DCC_CE_MK_LC_annotated$CD42pos_2>=2 |
+     DCC_CE_MK_LC_annotated$CD42pos_3>=2)
+dim(distinct(pos,geneName)) ## 3842
+```
+
+
+# CircRNA Specs
+
+# Exon count per circRNA
+## Low confidence circRNA
+```{r LC circ exon usage}
+
+## LC  ##
+mean(DCC_CE_MK_LC_annotated$exonCount,na.rm=T) # 4.564993 exon per circRNA on average
+median(DCC_CE_MK_LC_annotated$exonCount,na.rm = T) # 4 median exon per circRNA on average
+
+ggplot(DCC_CE_MK_LC_annotated, aes(exonCount))+
+  geom_histogram(binwidth = 1,fill="#20639B")+
+  scale_y_continuous(limits = c(0,3000), expand = c(0,0))+
+  scale_x_continuous(limits = c(0,50), expand = c(0,0))+
+  geom_vline(xintercept = 4.564993,color="red")+
+  ggtitle("Low confidence circRNA exon count")+
+  theme_classic()
+```
+
+## High confidence circRNA
+```{r HC circ exon usage}
+
+# HC #
+mean(DCC_CE_MK_HC_annotated$exonCount,na.rm=T) # 3.937994 exon per circRNA on average
+median(DCC_CE_MK_HC_annotated$exonCount, na.rm = T) # 3 median exon per circRNA on average
+
+ggplot(DCC_CE_MK_HC_annotated, aes(exonCount))+
+  geom_histogram(binwidth = 1,fill="#20639B")+
+  scale_y_continuous(limits = c(0,750), expand = c(0,0))+
+  scale_x_continuous(limits = c(0,50), expand = c(0,0))+
+  geom_vline(xintercept = 3.937994,color="red")+
+  ggtitle("High confidence circRNA exon count")+
+  theme_classic()
+
+```
+
+
+# Putative circRNA size
+## Low confidence circRNA
+```{r Putative circRNA size}
+
+# LC # 
+DCC_CE_MK_LC_annotated$spliced_length <- mapply(strsplit(as.character(DCC_CE_MK_LC_annotated$exonSizes),","),FUN=function(x){sum(as.numeric(x))})
+
+#head(DCC_CE_MK_LC_annotated)
+mean(DCC_CE_MK_LC_annotated$spliced_length,na.rm = T) # 663.871 nt on average
+median(DCC_CE_MK_LC_annotated$spliced_length,na.rm = T) # 484 nt median
+
+ggplot(DCC_CE_MK_LC_annotated, aes(log10(spliced_length)))+
+  geom_histogram(binwidth = 0.05,fill="#20639B")+ 
+  scale_y_continuous(limits = c(0,1000), expand = c(0,0))+
+  scale_x_continuous(limits = c(1,5), expand = c(0,0))+
+  ggtitle("Low confidence circRNA spliced length")+
+  geom_vline(xintercept = log10(663.871),color="red")+
+  theme_classic()
+```
+
+* High confidence circRNA
+```{r HC circRNA putative length}
+# HC #
+DCC_CE_MK_HC_annotated$spliced_length <- mapply(strsplit(as.character(DCC_CE_MK_HC_annotated$exonSizes),","),FUN=function(x){sum(as.numeric(x))})
+#head(DCC_CE_MK_HC_annotated)
+mean(DCC_CE_MK_HC_annotated$spliced_length) # 592.0774 nt per circRNA on average
+median(DCC_CE_MK_HC_annotated$spliced_length) # 443 nt median exon per circRNA
+
+ggplot(DCC_CE_MK_HC_annotated, aes(log10(spliced_length)))+
+  geom_histogram(binwidth = 0.05,fill="#20639B")+
+  scale_y_continuous(limits = c(0,250), expand = c(0,0))+
+  scale_x_continuous(limits = c(1,5), expand = c(0,0))+
+  ggtitle("High confidence circRNA spliced length")+
+  geom_vline(xintercept = log10(592.0774),color="red")+
+  theme_classic()
+
+```
+
+
+# Start exon usage
+* Low confidence circRNA
+```{r LC circRNA start exon usage}
+
+# LC #
+DCC_CE_MK_LC_annotated$first_exon <- mapply(strsplit(as.character(DCC_CE_MK_LC_annotated$index),","),FUN=function(x){min(sort(as.numeric(x)))})
+
+ggplot(DCC_CE_MK_LC_annotated, aes(first_exon))+
+  geom_histogram(binwidth = 1, fill="#c69452")+
+  scale_x_continuous(limits = c(0.5,5.5), expand = c(0,0))+
+  scale_y_continuous(limits=c(0,5000), expand = c(0,0))+
+  ggtitle("Start exon usage in LC circRNA")+
+  theme_classic()
+dim(DCC_CE_MK_LC)
+dim(subset(DCC_CE_MK_LC_annotated,DCC_CE_MK_LC_annotated$first_exon==2)) # 3742 (29.21383%) LC circRNA are starting at exon 2
+(3742/12809)*100
+
+dim(subset(DCC_CE_MK_LC_annotated,DCC_CE_MK_LC_annotated$first_exon==1)) # 32 circRNA at exon 1
+
+```
+
+* High confidence circRNA
+```{r HC circRNA start exon usage}
+# HC #
+DCC_CE_MK_HC_annotated$first_exon <- mapply(strsplit(as.character(DCC_CE_MK_HC_annotated$index),","),FUN=function(x){min(sort(as.numeric(x)))})
+
+ggplot(DCC_CE_MK_HC_annotated, aes(first_exon))+
+  geom_histogram(binwidth = 1, fill="#c69452")+
+  scale_x_continuous(limits = c(0.5,5.5), expand = c(0,0))+
+  scale_y_continuous(limits=c(0,1500), expand = c(0,0))+
+  ggtitle("Start exon usage in HC circRNA")+
+  theme_classic()
+dim(DCC_CE_MK_HC)
+dim(subset(DCC_CE_MK_HC_annotated,DCC_CE_MK_HC_annotated$first_exon==2)) # 942 (37.21849%) LC circRNA are starting at exon 2
+(942/2531)*100
+
+dim(subset(DCC_CE_MK_HC_annotated,DCC_CE_MK_HC_annotated$first_exon==1)) # 5 circRNA at exon 1
+
+```
+
+
+# End exon usage
+* First, low confidence circRNA
+```{r End exon usage}
+
+# We need to import the GTF file to get linear RNA informations # 
+hg_19_ref_linear <- read.delim("/home/ben/Analysis/circRNA_erys/circMK/hg19_ref_all.txt", header = F, sep = "")
+colnames(hg_19_ref_linear) <- c("Gene_name","isoformName","Chrom","Strand","Start","End","Thick_start","Thick_end","exon_number","exon_position","exon_position_2")
+hg_19_ref_linear$exon_position_2 <- NULL
+hg_19_ref_linear$exon_position <- NULL
+#head(hg_19_ref_linear)
+
+
+## for LC ##
+DCC_CE_MK_LC_annotated$last_exon <- mapply(strsplit(as.character(DCC_CE_MK_LC_annotated$index),","),FUN=function(x){max(sort(as.numeric(x)))}) # Getting the last exon used by the circRNA 
+
+
+last_exon_calc_LC <- data.frame(DCC_CE_MK_LC_annotated$ID,DCC_CE_MK_LC_annotated$geneName,DCC_CE_MK_LC_annotated$isoformName,DCC_CE_MK_LC_annotated$index,DCC_CE_MK_LC_annotated$first_exon,DCC_CE_MK_LC_annotated$last_exon,DCC_CE_MK_LC_annotated$exonCount) # Making a simplified data frame 
+colnames(last_exon_calc_LC) <-c("ID","geneName","isoformName","index","first_exon","last_exon","exonCount")
+#head(last_exon_calc_LC)
+
+last_exon_calc_LC <- merge(hg_19_ref_linear,last_exon_calc_LC,by = "isoformName",all.y = T) # Merging info on mRNA exons and circRNA exon usage for comparison
+#head(last_exon_calc_LC)
+
+
+last_exon_calc_LC$from_last_exon <- (((last_exon_calc_LC$last_exon)-(last_exon_calc_LC$exon_number))) ## getting the position of the last exon used in circRNA in relation to the mRNA exons. 
+
+last_exon_calc_LC <- subset(last_exon_calc_LC, last_exon_calc_LC$from_last_exon<=0)
+#head(last_exon_calc_LC)
+
+ggplot(last_exon_calc_LC,aes(x=from_last_exon))+
+  geom_histogram(binwidth = 1, fill="#8a4900",breaks=seq(-200, 0, by =1))+
+  scale_y_continuous(expand = c(0,0), limits = c(0,5000))+
+  scale_x_continuous(expand = c(0,0), limits = c(-6,0))+
+  theme_classic()
+
+dim(subset(last_exon_calc_LC,last_exon_calc_LC$from_last_exon==-1)) # 1814 (14.16192 %) LC circRNA use the second to last exon
+(1814/12809)*100 # 14.16192
+dim(subset(last_exon_calc_LC,last_exon_calc_LC$from_last_exon==0)) # 20 LC circRNA use the last exon, most likely mis-annotation of last exon?
+
+```
+
+
+* High confidence circRNA
+```{r HC circRNA last exon usage}
+# Same than above but for HC # 
+DCC_CE_MK_HC_annotated$last_exon <- mapply(strsplit(as.character(DCC_CE_MK_HC_annotated$index),","),FUN=function(x){max(sort(as.numeric(x)))})
+
+last_exon_calc_HC <- data.frame(DCC_CE_MK_HC_annotated$ID,DCC_CE_MK_HC_annotated$geneName,DCC_CE_MK_HC_annotated$isoformName,DCC_CE_MK_HC_annotated$index,DCC_CE_MK_HC_annotated$first_exon,DCC_CE_MK_HC_annotated$last_exon,DCC_CE_MK_HC_annotated$exonCount)
+colnames(last_exon_calc_HC) <-c("ID","geneName","isoformName","index","first_exon","last_exon","exonCount")
+#head(last_exon_calc_HC)
+
+last_exon_calc_HC <- merge(hg_19_ref_linear,last_exon_calc_HC,by = "isoformName",all.y = T)
+#head(last_exon_calc_HC)
+
+
+last_exon_calc_HC$from_last_exon <- (((last_exon_calc_HC$last_exon)-(last_exon_calc_HC$exon_number)))
+last_exon_calc_HC <- subset(last_exon_calc_HC, last_exon_calc_HC$from_last_exon<=0)
+#head(last_exon_calc_HC)
+
+ggplot(last_exon_calc_HC,aes(x=from_last_exon))+
+  geom_histogram(binwidth = 1, fill="#8a4900",breaks=seq(-200, 0, by =1))+
+  scale_y_continuous(expand = c(0,0), limits = c(0,550))+
+  scale_x_continuous(expand = c(0,0), limits = c(-6,0))+
+  theme_classic()
+
+dim(subset(last_exon_calc_HC,last_exon_calc_HC$from_last_exon==-1)) # 352 (13.90755 %) HC circRNA
+(352/2531)*100
+dim(subset(last_exon_calc_HC,last_exon_calc_HC$from_last_exon==0)) # 2 HC circRNA
+
+```
+
+
+# Chromosomal distribution of circRNA
+* First, low confidence circRNA
+```{r LC circRNA genome position}
+## Lets have a look at the circRNA distribution on the genome ##
+# LC #
+last_exon_calc_LC$Chr_number <- last_exon_calc_LC$Chrom
+last_exon_calc_LC$Chr_number <- gsub("chr","",last_exon_calc_LC$Chr_number)
+last_exon_calc_LC$Chr_number <- gsub("X","22",last_exon_calc_LC$Chr_number)
+last_exon_calc_LC$Chr_number <- gsub("Y","23",last_exon_calc_LC$Chr_number)
+
+ggplot(last_exon_calc_LC,aes(x=Chr_number))+
+  geom_bar()+
+  theme_classic()+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))+
+  scale_y_continuous(expand = c(0,0), limits = c(0,1500))+ 
+  scale_x_discrete(expand = c(0,0), limits = c(1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23))
+```
+
+
+* High confidence circRNA
+```{r HC circRNA genome position}
+# HC #
+last_exon_calc_HC$Chr_number <- last_exon_calc_HC$Chrom
+last_exon_calc_HC$Chr_number <- gsub("chr","",last_exon_calc_HC$Chr_number)
+last_exon_calc_HC$Chr_number <- gsub("X","22",last_exon_calc_HC$Chr_number)
+last_exon_calc_HC$Chr_number <- gsub("Y","23",last_exon_calc_HC$Chr_number)
+
+ggplot(last_exon_calc_HC,aes(x=Chr_number))+
+  geom_bar()+
+  theme_classic()+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))+
+  scale_y_continuous(expand = c(0,0), limits = c(0,250))+ 
+  scale_x_discrete(expand = c(0,0), limits = c(1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23))
+
+```
+
+
+# Relation position versus length of circRNA
+* First, low confidence circRNA
+```{r Relation position versus length of circRNA}
+## Is there a relation bewteen circRNA length and first exon used? ## 
+# LC #
+ggplot(DCC_CE_MK_LC_annotated, aes(x=first_exon,y=log10(spliced_length)))+
+  geom_boxplot(aes(group=first_exon))+
+  scale_x_continuous(limits = c(0.5,10.5))+
+  scale_y_continuous(limits = c(1,4))+
+  theme_classic()
+```
+
+* High confidence circRNA
+```{r Length vs first exon in HC circRNA}
+# HC #
+ggplot(DCC_CE_MK_HC_annotated, aes(x=first_exon,y=log10(spliced_length)))+
+  geom_boxplot(aes(group=first_exon))+
+  scale_x_continuous(limits = c(0.5,10.5))+
+  scale_y_continuous(limits = c(1,4))+
+  theme_classic()
+
+
+```
+
+# Sequencing depth correction 
+## For low confidence circRNA
+```{r library depth correction LC circRNA}
+## Here we correct for the library size (mapped reads based on genome mapping, unique + multimapped)
+v <- as.vector(c(73893274,106969774,69632408,52413968,74197986,70753502))
+
+# LC # 
+DCC_CE_MK_LC_c <- DCC_CE_MK_LC[,2:7]
+DCC_CE_MK_LC_c <- data.frame(mapply('/',DCC_CE_MK_LC_c,v))
+DCC_CE_MK_LC_c <- data.frame(mapply('*',DCC_CE_MK_LC_c,1000000))
+DCC_CE_MK_LC_c <- cbind.data.frame(DCC_CE_MK_LC$ID, DCC_CE_MK_LC_c)
+
+dim(DCC_CE_MK_LC_c)
+DCC_CE_MK_LC_c[is.na(DCC_CE_MK_LC_c)]=0
+colnames(DCC_CE_MK_LC_c) <- c("ID","CD42neg_1","CD42neg_2","CD42neg_3","CD42pos_1","CD42pos_2","CD42pos_3")
+
+```
+
+## For High confidence circRNA
+```{r library depth correction HC circRNA}
+# HC #
+DCC_CE_MK_HC_c <- DCC_CE_MK_HC[,2:7]
+DCC_CE_MK_HC_c <- data.frame(mapply('/',DCC_CE_MK_HC_c,v))
+DCC_CE_MK_HC_c <- data.frame(mapply('*',DCC_CE_MK_HC_c,1000000))
+DCC_CE_MK_HC_c <- cbind.data.frame(DCC_CE_MK_HC$ID, DCC_CE_MK_HC_c)
+#head(DCC_CE_MK_HC_c)
+dim(DCC_CE_MK_HC_c)
+DCC_CE_MK_HC_c[is.na(DCC_CE_MK_HC_c)]=0
+colnames(DCC_CE_MK_HC_c) <- c("ID","CD42neg_1","CD42neg_2","CD42neg_3","CD42pos_1","CD42pos_2","CD42pos_3")
+
+
+DCC_CE_MK_HC_c <- merge(DCC_CE_MK_HC_c,CE_MK_annotation_file,by="ID")
+write.table(DCC_CE_MK_HC_c,"DCC_CE_MK_HC_corrected_depth.csv",sep = ";",row.names = F,dec = ",")
+```
+
+
+```{r same for lin counts}
+
+DCC_MK_lin_c <- DCC_MK_lin
+
+DCC_MK_lin_c
+v <- as.vector(c(73893274,106969774,69632408,52413968,74197986,70753502))
+
+# LC # 
+DCC_MK_lin_c <- DCC_MK_lin_c[,2:7]
+DCC_MK_lin_c <- data.frame(mapply('/',DCC_MK_lin_c,v))
+DCC_MK_lin_c <- data.frame(mapply('*',DCC_MK_lin_c,1000000))
+DCC_MK_lin_c <- cbind.data.frame(DCC_MK_lin$ID, DCC_MK_lin_c)
+
+colnames(DCC_MK_lin_c)[1] <- "ID"
+
+```
+
+
+## Importing platelet data ##
+```{r importing platetlets data}
+## Importing platelets data from Nicolet et al. 2018 ##
+
+## LC circRNA ## 
+LC_plt <- read.delim("./PLT_LC_file.csv",sep=";",dec=",")
+LC_plt[5:12] <- NULL
+LC_plt <- subset(LC_plt,LC_plt$Plt1>=2 |
+                   LC_plt$Plt2>=2 | 
+                   LC_plt$Plt3>=2)
+dim(LC_plt) # 47654 circRNa in PLT with LC cut off
+
+
+## Here we correct for the sequencing depth in platlets ##
+LC_plt_c <- LC_plt
+LC_plt_c$Plt1 <- (LC_plt_c$Plt1/40902006)*1000000
+LC_plt_c$Plt2 <- (LC_plt_c$Plt2/37380346)*1000000
+LC_plt_c$Plt3 <- (LC_plt_c$Plt3/43617620)*1000000
+
+dim(distinct(LC_plt,geneName)) # 6516 genes with circRNA in plt 
+
+
+
+## HC circRNA ##
+
+HC_plt <- read.delim("./PLT_specific_HC_co-detected.csv",sep=";",dec=",")
+head(HC_plt)
+dim(HC_plt)
+
+HC_plt <- HC_plt[1:4]
+HC_plt_ID <- HC_plt$ID
+HC_plt <- data.frame(mapply('/',HC_plt[2:4],2)) ## CE2 bugged on these samples and counted 2x the reads. I couldnt correct for this in CE2, so I do here
+
+HC_plt$ID <- HC_plt_ID
+
+## Lib depth correction for HC circRNA # 
+HC_plt_c <- HC_plt
+HC_plt_c$Plt1 <- (HC_plt_c$Plt1/40902006)*1000000
+HC_plt_c$plt2 <- (HC_plt_c$plt2/37380346)*1000000
+HC_plt_c$plt3 <- (HC_plt_c$plt3/43617620)*1000000
+
+
+```
+
+
+## Correlation of MK and PLT with LC circRNA
+```{r Corrlation of MK and PLT with LC circRNA}
+
+## for LC circRNA ##
+DCC_CE_MK_PLT_LC_c <- merge(DCC_CE_MK_LC_c,LC_plt_c,by="ID",all=T)
+
+DCC_CE_MK_PLT_LC_c <- DCC_CE_MK_PLT_LC_c[1:10]
+DCC_CE_MK_PLT_LC_c[is.na(DCC_CE_MK_PLT_LC_c)]=0
+
+col_fun = colorRamp2(c(-3, -1.5, 0, 1.5, 3), c("#053061","#579EC9","#FFFFFF","#D96651","#67001F")) ## Making a custom color palette
+
+corrplot::corrplot(corr = (cor(DCC_CE_MK_PLT_LC_c[2:10])),method = "shade",diag = T,type = "full",
+                   col = col_fun(seq(-8,3,by=0.01)),hclust.method = "complete",order = "original",cl.lim=c(0,1))
+```
+
+
+## Correlation of MK and PLT with HC circRNA
+```{r Correlation of MK and PLT with HC circRNA}
+## in HC circRNA ##
+DCC_CE_MK_PLT_HC_c <- merge(DCC_CE_MK_HC_c,HC_plt_c,by="ID",all=T)
+DCC_CE_MK_PLT_HC_c$Co_detected <- NULL
+
+DCC_CE_MK_PLT_HC_c <- cbind(DCC_CE_MK_PLT_HC_c[1:7],DCC_CE_MK_PLT_HC_c[24:26])
+DCC_CE_MK_PLT_HC_c[is.na(DCC_CE_MK_PLT_HC_c)]=0
+
+
+col_fun = colorRamp2(c(-3, -1.5, 0, 1.5, 3), c("#053061","#579EC9","#FFFFFF","#D96651","#67001F"))
+
+#col_fun(seq(-2,2,by=0.01))
+pheatmap(DCC_CE_MK_PLT_HC_c[2:10], col_fun(seq(-5,5,by=0.01)) ,scale = "row",
+         clustering_distance_cols = "canberra", cluster_cols = F, cluster_rows = T, 
+         border_color = NA, labels_col=colnames(DCC_CE_MK_PLT_HC_c[2:10]),fontsize_row=0.1,
+         clustering_distance_rows = "manhattan")
+
+col_fun= colorRamp2(c(-3, -1.5, 0, 1.5, 3), c("#053061","#579EC9","#FFFFFF","#D96651","#67001F"))
+corrplot::corrplot(corr = (cor(DCC_CE_MK_PLT_HC_c[,2:10])),method = "shade",diag = T,type = "full",
+                   col =col_fun(seq(-7,3,by=0.01)),order = "original",cl.lim=c(0,1) )+ theme(aspect.ratio = 1)
+
+```
+
+
+```{r k_means heatmap}
+## Lets now see how MK and platelets express HC circRNA ##
+
+## For clarity in the figure, I use a k-means approach (k is determined manually) ##
+set.seed(1234) # Due to random number generation, we set a seed. 
+
+k_means_MK_PLT <- pheatmap(DCC_CE_MK_PLT_HC_c[2:10], col_fun(seq(-5,5,by=0.01)) ,scale = "row",
+        cluster_cols = F, cluster_rows = F,
+         border_color = NA, labels_col=colnames(DCC_CE_MK_PLT_HC_c[2:10]),fontsize_row=5,
+        kmeans_k = 5,clustering_method = "manhattan")
+
+DCC_CE_MK_PLT_HC_c_kmeans <- DCC_CE_MK_PLT_HC_c
+DCC_CE_MK_PLT_HC_c_kmeans <- cbind(DCC_CE_MK_PLT_HC_c_kmeans, "kmeans"=k_means_MK_PLT$kmeans$cluster) # Getting stuff together ##
+
+
+DCC_CE_MK_PLT_HC_c_kmeans <- DCC_CE_MK_PLT_HC_c_kmeans[order(DCC_CE_MK_PLT_HC_c_kmeans$kmeans,decreasing = F ),] # Ordering circRNA by cluster number 
+
+pheatmap(DCC_CE_MK_PLT_HC_c_kmeans[2:10], col_fun(seq(-5,5,by=0.01)) ,scale = "row",
+         clustering_distance_cols = "canberra", cluster_cols = F, cluster_rows = F,
+         border_color = NA, labels_col=colnames(DCC_CE_MK_PLT_HC_c_kmeans[2:10]),fontsize_row=0.1,
+         clustering_distance_rows = "manhattan", gaps_col = 6)
+
+## Saving stuff ##
+#DCC_CE_MK_HC_c_kmeans <- merge(DCC_CE_MK_PLT_HC_c_kmeans,CE_MK_annotation_file, by="ID",all.x=T)
+#write.table(DCC_CE_MK_HC_c_kmeans,"DCC_CE_MK_PLT_HC_c_withkmeans_n=5.csv",sep=";",dec=",",row.names = FALSE)
+
+```
+
+# PCA
+* PCA low confidence 
+```{r PCA using LC circRNA}
+
+DCC_CE_MK_LC_c_PCA <- DCC_CE_MK_LC_c[2:7] #Selecting count columns for PCA
+{
+gp <- c("CD42neg","CD42neg","CD42neg","CD42pos","CD42pos","CD42pos") # Making groups for PCA visualization
+dim(gp)
+PCA_data <- cbind.data.frame(t(DCC_CE_MK_LC_c_PCA[1:6]),gp)
+head(PCA_data)
+dim(PCA_data)
+PCA_data[is.na(PCA_data)]= 0
+PCA <- prcomp(PCA_data[2:6753])
+plot(PCA) 
+}
+
+
+### PCA on shared circRNA ### 
+autoplot(prcomp(PCA_data[2:6753]), data = PCA_data, colour='gp', size = 2,variance_percentage = T)+
+  theme_classic()
+
+```
+
+* PCA high confidence 
+```{r PCA using HC circRNA}
+
+## Same for HC circRNA #
+DCC_CE_MK_HC_c_PCA <- DCC_CE_MK_HC_annotated[2:7]
+{
+gp <- c("CD42neg","CD42neg","CD42neg","CD42pos","CD42pos","CD42pos")
+dim(gp)
+PCA_data <- cbind.data.frame(t(DCC_CE_MK_HC_c_PCA[1:6]),gp)
+head(PCA_data)
+dim(PCA_data)
+PCA_data[is.na(PCA_data)]= 0
+PCA <- prcomp(PCA_data[2:748])
+plot(PCA) 
+}
+
+### PCA on shared circRNA ### 
+autoplot(prcomp(PCA_data[2:748],scale. = F),data=PCA_data, size = 2, colour="gp",variance_percentage = T)+
+  theme_classic()
+
+
+
+```
+
+
+# Calculation of CLR (only on high confidence)
+```{r CLR 42neg}
+## Here we compute the circular-over-linear ratio (CLR) ##
+
+DCC_CE_lin_circ_mk_HC <- merge(DCC_CE_MK_HC,DCC_MK_lin,by="ID") # Merging lin + circ RNA counts
+
+DCC_CE_lin_circ_mk_HC <- distinct(DCC_CE_lin_circ_mk_HC,.keep_all = T) # making sure we didnt make double when merging
+
+dim(DCC_CE_lin_circ_mk_HC)
+
+### CD42- MK ###
+{
+  CD42neg<- NULL
+  CD42neg$ID <- (DCC_CE_lin_circ_mk_HC$ID)
+  CD42neg <- data.frame(CD42neg)
+  dim(CD42neg)
+  CD42neg$ratio1 <- (((DCC_CE_lin_circ_mk_HC$CD42neg_1)/(DCC_CE_lin_circ_mk_HC$CD42neg_1_lin))) # Making ratios per sample
+  CD42neg$ratio2 <- (((DCC_CE_lin_circ_mk_HC$CD42neg_2)/(DCC_CE_lin_circ_mk_HC$CD42neg_2_lin)))
+  CD42neg$ratio3 <- (((DCC_CE_lin_circ_mk_HC$CD42neg_3)/(DCC_CE_lin_circ_mk_HC$CD42neg_3_lin)))
+  CD42neg$ratio <- (((CD42neg$ratio1)+(CD42neg$ratio2)+(CD42neg$ratio3))/3)
+  CD42neg$Lin<- (((DCC_CE_lin_circ_mk_HC$CD42neg_1_lin)+(DCC_CE_lin_circ_mk_HC$CD42neg_2_lin)+(DCC_CE_lin_circ_mk_HC$CD42neg_3_lin))/3)
+  CD42neg$circ<- (((DCC_CE_lin_circ_mk_HC$CD42neg_1)+(DCC_CE_lin_circ_mk_HC$CD42neg_2)+(DCC_CE_lin_circ_mk_HC$CD42neg_3))/3  )
+  head(CD42neg)
+  CD42neg[is.na(CD42neg)] = 0
+  CD42neg <- subset(CD42neg, ratio>0)
+  CD42neg <- merge(CD42neg,CE_MK_annotation_file, by="ID",all.x=T) # Merging with annotation file
+  CD42neg <- merge(CD42neg, DCC_CE_MK_HC_c, by="ID", all.x=T) # Using lib depth corrected data for expression 
+  CD42neg$circRPM <- rowMeans(CD42neg[26:28]) # Average in populaiton
+}
+
+
+ggplot(CD42neg, aes(x=log10(circRPM), y=ratio))+
+  geom_point()+
+  geom_point(data=CD42neg[CD42neg$ratio>0.5,],color="grey")+
+  geom_point(data= CD42neg[CD42neg$ratio>1,],color="blue")+
+  theme_classic()+
+  geom_text(data=CD42neg[CD42neg$ratio >= 1,], aes(label = geneName.x), size = 3 ,nudge_y = 0.05, nudge_x = 0.15)+
+  labs(y="[ circular / linear ]", x= "log10 [circ RPM ]")+
+  theme(panel.border = element_rect(fill = NA))+
+  geom_hline(yintercept = 1, linetype="dotted")+
+  #geom_vline(xintercept = 0, linetype="dotted")+
+  scale_y_continuous(limits = c(0,3), expand = c(0,0))+
+  scale_x_continuous(limits = c(-2,2), expand = c(0,0))+
+  theme(aspect.ratio = 1)
+
+
+CD42neg <- do.call(data.frame,lapply(CD42neg, function(x) replace(x, is.infinite(x),NA)))
+mean(CD42neg$ratio,na.rm = T) # 0.05440738
+
+```
+
+
+
+```{r CLR 42pos}
+## Same for CD42+ MK ##
+{
+  CD42pos<- NULL
+  CD42pos$ID <- (DCC_CE_lin_circ_mk_HC$ID)
+  CD42pos$ratio1 <- (((DCC_CE_lin_circ_mk_HC$CD42pos_1)/(DCC_CE_lin_circ_mk_HC$CD42pos_1_lin)))
+  CD42pos$ratio2 <- (((DCC_CE_lin_circ_mk_HC$CD42pos_2)/(DCC_CE_lin_circ_mk_HC$CD42pos_2_lin)))
+  CD42pos$ratio3 <- (((DCC_CE_lin_circ_mk_HC$CD42pos_3)/(DCC_CE_lin_circ_mk_HC$CD42pos_3_lin)))
+  CD42pos$ratio <- (((CD42pos$ratio1)+(CD42pos$ratio2)+(CD42pos$ratio3))/3)
+  CD42pos$Lin<- (((DCC_CE_lin_circ_mk_HC$CD42pos_1_lin)+(DCC_CE_lin_circ_mk_HC$CD42pos_2_lin)+(DCC_CE_lin_circ_mk_HC$CD42pos_3_lin))/3)
+  CD42pos$circ<- (((DCC_CE_lin_circ_mk_HC$CD42pos_1)+(DCC_CE_lin_circ_mk_HC$CD42pos_2)+(DCC_CE_lin_circ_mk_HC$CD42pos_3))/3  )
+  CD42pos <- data.frame(CD42pos)
+  head(CD42pos)
+  CD42pos[is.na(CD42pos)] = 0
+  CD42pos <- subset(CD42pos, ratio>0)
+  CD42pos <- merge(CD42pos,CE_MK_annotation_file, by="ID",all.x=T)
+  CD42pos <- merge(CD42pos, DCC_CE_MK_HC_c, by="ID", all.x=T)
+  CD42pos$circRPM <- rowMeans(CD42pos[27:29])
+}
+
+
+
+ggplot(CD42pos, aes(x=log10(circRPM), y=ratio))+
+  geom_point()+
+  geom_point(data=CD42pos[CD42pos$ratio>0.5,],color="grey")+
+  geom_point(data= CD42pos[CD42pos$ratio>1,],color="blue")+
+  theme_classic()+
+  geom_text(data=CD42pos[CD42pos$ratio >= 1,], aes(label = geneName.x), size = 3 ,nudge_y = 0.05, nudge_x = 0.15)+
+  labs(y="[ circular / linear ]", x= "log10 [circ RPM ]")+
+  theme(panel.border = element_rect(fill = NA))+
+  geom_hline(yintercept = 1, linetype="dotted")+
+  scale_y_continuous(limits = c(0,3), expand = c(0,0))+
+  scale_x_continuous(limits = c(-2,2), expand = c(0,0))+
+  theme(aspect.ratio = 1)
+
+
+CD42pos <- do.call(data.frame,lapply(CD42pos, function(x) replace(x, is.infinite(x),NA)))
+mean(CD42pos$ratio,na.rm = T) # 0.1130388
+
+```
+
+
+
+```{r CLR PLT}
+
+## Same for platelets ##
+
+CLR_plt <- read.delim("./Platelets_CLR.csv", sep=";", dec=",") ## getting the CLR from Nicolet et al., 2018, NAR
+
+  PLT_CLR_expr<- NULL
+  PLT_CLR_expr <- merge(HC_plt_c,CLR_plt, by="ID",all=T) # Mergin expression data and CLR data
+  PLT_CLR_expr$avg_circ_corr <- (PLT_CLR_expr$Plt1 + PLT_CLR_expr$plt2 + PLT_CLR_expr$plt3)/3 # population average
+  PLT_CLR_expr[is.na(PLT_CLR_expr)] = 0
+
+
+ggplot(PLT_CLR_expr, aes(x=log10(avg_circ_corr), y=ratio.average))+
+  geom_point()+
+  geom_point(data=PLT_CLR_expr[PLT_CLR_expr$ratio.average>0.5,],color="grey")+
+  geom_point(data= PLT_CLR_expr[PLT_CLR_expr$ratio.average>1,],color="blue")+
+  theme_classic()+
+  ggrepel::geom_text_repel(data=PLT_CLR_expr[PLT_CLR_expr$ID %in% CD42pos[CD42pos$ratio >= 1,]$ID,], aes(label = geneName), size = 3,force = 5, min.segment.length = 0.001)+
+  labs(y="[ circular / linear ]", x= "log10 [circ RPM ]")+
+  theme(panel.border = element_rect(fill = NA))+
+  geom_hline(yintercept = 1, linetype="dotted")+
+  scale_y_continuous(limits = c(0,3), expand = c(0,0))+
+  scale_x_continuous(limits = c(-2,2), expand = c(0,0))+
+  theme(aspect.ratio = 1)
+
+
+
+```
+
+
+## Plotting CLR of MK and plt
+```{r Plotting CLR of MK and plt}
+
+## Making a simplified df and assigning groups ##
+
+CLR_plt <- read.delim("./Platelets_CLR.csv", sep=";", dec=",")
+CLR_for_export_CD42neg <- CD42neg
+CLR_for_export_CD42pos <- CD42pos
+
+
+CLR_for_export_CD42neg$group <- "CD42neg"
+CLR_for_export_CD42pos$group <- "CD42pos"
+CLR_plt$group <- "plt"
+
+CLR_for_export_CD42neg <- data.frame("ID"=CLR_for_export_CD42neg$ID,
+                                     "CLR"=CLR_for_export_CD42neg$ratio,
+                                     #"geneName_1"=CLR_for_export_CD42neg$geneName.x,
+                                     "group"=CLR_for_export_CD42neg$group)
+
+
+CLR_for_export_CD42pos <- data.frame("ID"=CLR_for_export_CD42pos$ID,
+                                     "CLR"=CLR_for_export_CD42pos$ratio,
+                                     #"geneName"=CLR_for_export_CD42pos$geneName.x,
+                                     "group"=CLR_for_export_CD42pos$group)
+
+
+CLR_plt <- data.frame("ID"=CLR_plt$ID,
+                      "CLR"=CLR_plt$ratio.average,
+                      #"geneName"=CLR_plt$geneName,
+                       "group"=CLR_plt$group)
+
+CLR_for_export_MK <- rbind(CLR_for_export_CD42neg,CLR_for_export_CD42pos,CLR_plt) # merging all populations together
+dim(CLR_for_export_MK)
+
+## Making a pretty plot with the CLR of MKs and plt: ##
+
+ggplot(CLR_for_export_MK,aes(y=log10(CLR),x=group))+
+  geom_boxplot(aes(group=group))+ 
+  theme_classic()+
+  theme(legend.box = "horizontal")+
+  theme(aspect.ratio = 1.5)
+
+
+
+## Running some stats and correcting p-value for sample size ##
+
+t.test(CLR_for_export_MK$CLR[CLR_for_export_MK$group=="CD42neg"],CLR_for_export_MK$CLR[CLR_for_export_MK$group=="CD42pos"])
+dim(CD42neg)
+# t = -14.841, df = 4341, p-value < 2.2e-16
+#  mean of x  mean of y 
+# 0.05440738 0.11303876 
+
+p.adjust(2.2e-16,method = "BH",n = 4341) # 9.5502e-13
+
+0.11303876/0.05440738 # 2.077637 fold difference
+
+
+t.test(CLR_for_export_MK$CLR[CLR_for_export_MK$group=="CD42pos"],CLR_for_export_MK$CLR[CLR_for_export_MK$group=="plt"])
+# t = -33.92, df = 13176, p-value < 2.2e-16
+#  mean of x  mean of y 
+# 0.1130388 0.3513195
+
+p.adjust(2.2e-16,method = "BH",n = 13176) # 2.89872e-12
+
+0.3513195/0.11303876 # 3.107956 fold difference
+
+```
+
+
+
+# DE expression of HC circRNA
+```{r DESeq2 prep}
+
+## Here we prepare thinkg for differential expression analysis with DESeq2 ##
+
+## Count data ##
+counts_mk <- data.frame(DCC_CE_MK_HC[2:7])
+rownames(counts_mk) <- DCC_CE_MK_HC$ID
+
+## Col data (sample info) ##
+{
+colData_mk <- NULL
+colData_mk$Samples <- colnames(counts_mk)
+colData_mk$population <- c("CD42neg","CD42neg","CD42neg","CD42pos","CD42pos","CD42pos")
+colData_mk$replicate <- c("A","B","C","A","B","C")
+colData_mk <- data.frame(colData_mk)
+rownames(colData_mk) <- colData_mk$Samples
+colData_mk$Samples <- NULL
+}
+
+## checking the compatibility between the 2 tables ##
+all(rownames(colData_mk) %in% colnames(counts_mk))
+all(rownames(colData_mk) == colnames(counts_mk))
+
+```
+
+
+```{r Running DESeq2}
+
+## Lets run DESeq2 !! ##
+
+dds_mk <- DESeqDataSetFromMatrix(countData = counts_mk, colData = colData_mk, design = ~ population)
+
+## DEseq2 automatically estimates the size of the sample library by summing up the counts per samples ##
+## As circRNA are increasing in MK differenciation, DESeq2 will consider that the library depth increases ##
+## whihc in turn will mess up the DE analysis... So we provide custom lib size estimates based on the total lib size ## 
+
+# lib size mapped reads 73893274,106969774,69632408,52413968,74197986,70753502
+sizeFactors(dds_mk) <- c(1,1.447625,0.9423376,0.7093199,1.004124,0.9575094)
+
+dds_mk <- DESeq(dds_mk, fitType = "local", sfType = "ratio", test="Wald", parallel = T)
+res <- results(dds_mk, alpha = 0.5)
+
+
+DESeq2::plotMA(res, ylim=c(-8,8), alpha=0.5)
+
+resultsNames(dds_mk)
+
+```
+
+
+
+
+```{r Filtering on P-ADJ}
+
+## Here we select the significant hits ##
+
+CD42neg_vs_CD42pos <- results(dds_mk,contrast = c("population","CD42pos","CD42neg"), alpha = 0.1)
+CD42neg_vs_CD42pos <- data.frame(CD42neg_vs_CD42pos)
+CD42neg_vs_CD42pos$ID <- rownames(CD42neg_vs_CD42pos)
+dim(subset(CD42neg_vs_CD42pos,CD42neg_vs_CD42pos$padj<0.05)) # 287 DE circRNA
+
+287/2531*100 # 11.33939 %  of circRNA are DE between MKs!
+
+CD42neg_vs_CD42pos <- merge(CD42neg_vs_CD42pos,CE_MK_annotation_file, by.all="ID",all.x=T)
+
+## Making a pretty volcano plot ## 
+ggplot(CD42neg_vs_CD42pos,aes(x=log2FoldChange,y=-log(padj)))+
+  geom_point()+
+  geom_point(data=CD42neg_vs_CD42pos[CD42neg_vs_CD42pos$padj<0.05,],color="red")+
+  ggrepel::geom_text_repel(data=CD42neg_vs_CD42pos[CD42neg_vs_CD42pos$padj<0.01,],aes(label=geneName), size = 3)+
+  geom_hline(yintercept = -log(0.05))+
+  geom_vline(xintercept = -0.5)+
+  geom_vline(xintercept = 0.5)+
+  geom_vline(xintercept = 0)+
+  theme_classic()+
+  scale_x_continuous(limits = c(-5,5))+
+  scale_y_continuous(limits = c(0,10))+
+  theme(aspect.ratio = 1)
+
+## Exporting stuff ##
+write.table(CD42neg_vs_CD42pos,"DE_HC_circRNA_MK.csv", sep=";",dec = ",",row.names = F)
+
+## Selecting hits by filtering on p-adj ##
+CD42neg_vs_CD42pos_DE_circ <- subset(CD42neg_vs_CD42pos,CD42neg_vs_CD42pos$padj<0.05)
+
+```
+
+
+
+# LFC circ versus LFC lin CD42neg vs CD42pos 
+```{r LFC circRNA vs LFC lin in MK differentiation}
+
+## Here we want to understand the relation of circRNA expression and mRNA expression (measured by DCC at circRNA postion for fairness of comparison) ## 
+
+## For this we compute the log2 Fold Change (LFC) ##
+#log2FC(AB) = log2(B) - log2(A)
+
+{
+  CD42neg_CD42pos_LFC <- NULL
+  CD42neg_CD42pos_LFC$ID <- (DCC_CE_lin_circ_mk_HC$ID)
+  CD42neg_CD42pos_LFC$avg_circ_neg <- (DCC_CE_lin_circ_mk_HC$CD42neg_1+ DCC_CE_lin_circ_mk_HC$CD42neg_2+ DCC_CE_lin_circ_mk_HC$CD42neg_3)/3
+  CD42neg_CD42pos_LFC$log_circ_neg <- log2(CD42neg_CD42pos_LFC$avg_circ_neg)
+  
+  CD42neg_CD42pos_LFC$avg_circ_pos <- (DCC_CE_lin_circ_mk_HC$CD42pos_1+ DCC_CE_lin_circ_mk_HC$CD42pos_2+ DCC_CE_lin_circ_mk_HC$CD42pos_3)/3
+  CD42neg_CD42pos_LFC$log_circ_pos <- log2(CD42neg_CD42pos_LFC$avg_circ_pos)
+  
+  CD42neg_CD42pos_LFC$LFC_circ <- (CD42neg_CD42pos_LFC$log_circ_pos - CD42neg_CD42pos_LFC$log_circ_neg)
+  
+  CD42neg_CD42pos_LFC$avg_lin_neg <- (DCC_CE_lin_circ_mk_HC$CD42neg_1_lin+ DCC_CE_lin_circ_mk_HC$CD42neg_2_lin+ DCC_CE_lin_circ_mk_HC$CD42neg_3_lin)/3
+  CD42neg_CD42pos_LFC$log_lin_neg <- log2(CD42neg_CD42pos_LFC$avg_lin_neg)
+  
+  CD42neg_CD42pos_LFC$avg_lin_pos <- (DCC_CE_lin_circ_mk_HC$CD42pos_1_lin+ DCC_CE_lin_circ_mk_HC$CD42pos_2_lin+ DCC_CE_lin_circ_mk_HC$CD42pos_3_lin)/3
+  CD42neg_CD42pos_LFC$log_lin_pos <- log2(CD42neg_CD42pos_LFC$avg_lin_pos)
+
+  CD42neg_CD42pos_LFC$LFC_lin <- (CD42neg_CD42pos_LFC$log_lin_pos - CD42neg_CD42pos_LFC$log_lin_neg)
+
+  CD42neg_CD42pos_LFC <- do.call(data.frame,lapply(CD42neg_CD42pos_LFC, function(x) replace(x, is.infinite(x),NA)))
+  CD42neg_CD42pos_LFC[is.na(CD42neg_CD42pos_LFC)]=NA
+  
+  CD42neg_CD42pos_LFC <- merge(CD42neg_CD42pos_LFC,CE_MK_annotation_file, by.all="ID")
+  }
+
+## plotting things quickly ##
+ggplot(CD42neg_CD42pos_LFC, aes(x=LFC_lin,y=LFC_circ))+
+  geom_point(color="black",alpha=0.5,size=2)+
+  geom_vline(xintercept = 0)+
+  geom_hline(yintercept = 0)+
+  labs(y="LFC circRNA 42pos - 42neg", x= "LFC linear RNA 42pos - 42neg")+
+  theme_minimal()
+
+  
+## Now making a prety one ##
+ggplot(CD42neg_CD42pos_LFC, aes(x=LFC_lin,y=LFC_circ))+
+  geom_point(size=1,color="#676767")+
+  geom_point(data=CD42neg_CD42pos_LFC[(CD42neg_CD42pos_LFC$LFC_circ >=0.5)&(CD42neg_CD42pos_LFC$LFC_lin <=-0.5),],color="red",size=1)+
+  geom_point(data=CD42neg_CD42pos_LFC[(CD42neg_CD42pos_LFC$LFC_circ >=0.5)&(CD42neg_CD42pos_LFC$LFC_lin >=0.5),],color="#ffa600",size=1)+
+  geom_point(data=CD42neg_CD42pos_LFC[(CD42neg_CD42pos_LFC$LFC_circ <=-0.5)&(CD42neg_CD42pos_LFC$LFC_lin <=-0.5),],color="#ff6361",size=1)+
+  geom_point(data=CD42neg_CD42pos_LFC[(CD42neg_CD42pos_LFC$LFC_lin <=0.5)&(CD42neg_CD42pos_LFC$LFC_lin >=-0.5)&(CD42neg_CD42pos_LFC$LFC_circ <=-0.5),],color="#58508d",size=1)+
+  geom_point(data=CD42neg_CD42pos_LFC[(CD42neg_CD42pos_LFC$LFC_lin <=0.5)&(CD42neg_CD42pos_LFC$LFC_lin >=-0.5)&(CD42neg_CD42pos_LFC$LFC_circ >=0.5),],color="#58508d",size=1)+
+  theme_classic()+
+  labs(y="LFC circular CD42neg/CD42pos", x= "LFC linear CD42neg/CD42pos")+
+  scale_y_continuous(expand = c(0,0), limits = c(-5,5))+ 
+  scale_x_continuous(expand = c(0,0), limits = c(-5,5))+
+  geom_vline(xintercept = 0,linetype="dotted")+
+  geom_hline(yintercept = 0,linetype="dotted")+
+  #geom_text(aes(label=ifelse(((LFC_circ >=1) & (LFC_lin >=1)),as.character(geneName),'')), hjust=-0.1,vjust=-0.5, size=2.5)+
+  #geom_text(aes(label=ifelse(((LFC_circ <=-1) & (LFC_lin <=-1)),as.character(geneName),'')), hjust=-0.1,vjust=-0.5, size=2.5)+
+  #geom_text(aes(label=ifelse(((LFC_circ >=0.7) & (LFC_lin <=-0.7)),as.character(geneName),'')), hjust=-0.1,vjust=-0.5, size=2.5)+
+  geom_vline(xintercept = -0.5,linetype="dotted")+
+  geom_vline(xintercept = 0.5,linetype="dotted")+
+  geom_hline(yintercept = -0.5,linetype="dotted")+
+  geom_hline(yintercept = 0.5,linetype="dotted")+
+  theme(aspect.ratio = 1)
+
+
+## lets identify the number of circRNA (and %) per group ## 
+
+dim(CD42neg_CD42pos_LFC[(CD42neg_CD42pos_LFC$LFC_circ <=-0.5)&(CD42neg_CD42pos_LFC$LFC_lin <=-0.5),])# 34 circRNA in group1
+34/2531*100 # 1.343343 %
+
+dim(CD42neg_CD42pos_LFC[(CD42neg_CD42pos_LFC$LFC_circ >=0.5)&(CD42neg_CD42pos_LFC$LFC_lin <=-0.5),]) # 368 circRNA in group2
+368/2531*100 # 14.53971 %
+
+dim(CD42neg_CD42pos_LFC[(CD42neg_CD42pos_LFC$LFC_lin <=0.5)&(CD42neg_CD42pos_LFC$LFC_lin >=-0.5)&abs(CD42neg_CD42pos_LFC$LFC_circ >=0.5),]) ## 1279 circRNA in group 3
+1279/2531*100 # 50.53339%
+
+50.53339+14.53971 #65.0731%
+
+dim(CD42neg_CD42pos_LFC[(CD42neg_CD42pos_LFC$LFC_circ >=0.5)&(CD42neg_CD42pos_LFC$LFC_lin >=0.5),]) # 95 circRNA in group 4
+413/2531*100 # 16.31766 %
+
+1.343343+16.31766 # = 17.661
+
+2531-(34+368+1279+413) #437
+
+437/2531*100 # 17.2659 %
+
+
+ggplot(CD42neg_CD42pos_LFC, aes(x=LFC_lin,y=LFC_circ))+
+  geom_point(color="black",alpha=0.3,size=2)+
+  geom_vline(xintercept = 0)+
+  geom_hline(yintercept = 0)+
+  geom_smooth(method = lm)+
+  labs(y="LFC circRNA 42pos - 42neg", x= "LFC linear RNA 42pos - 42neg")+
+  theme_minimal()
+
+## little correlation ##  
+cor(CD42neg_CD42pos_LFC$LFC_lin, CD42neg_CD42pos_LFC$LFC_circ)  ## there is a correlation of 0.4879062
+
+## assessing the extent of change in circRNA or mRNA expression in MK ##
+max(CD42neg_CD42pos_LFC$LFC_circ,na.rm = T) - min(CD42neg_CD42pos_LFC$LFC_circ,na.rm = T) # 7.661778
+max(CD42neg_CD42pos_LFC$LFC_lin,na.rm = T) - min(CD42neg_CD42pos_LFC$LFC_lin,na.rm = T) # 7.603478
+
+
+```
+
+
+# group-wise expression
+```{r group-wise expression}
+
+## checking the expression level of circRNa in the different group ## 
+## pretty useless, still here, but not in the final paper ##
+
+group_expr_circ_lin <- DCC_CE_MK_HC_c
+
+mk_circ_up_lin_down <- data.frame(CD42neg_CD42pos_LFC[(CD42neg_CD42pos_LFC$LFC_circ >=0.5)&(CD42neg_CD42pos_LFC$LFC_lin <=-0.5),])
+mk_circ_up_lin_up <- data.frame(CD42neg_CD42pos_LFC[(CD42neg_CD42pos_LFC$LFC_circ >=0.5)&(CD42neg_CD42pos_LFC$LFC_lin >=0.5),])
+mk_circ_down_lin_down <- data.frame(CD42neg_CD42pos_LFC[(CD42neg_CD42pos_LFC$LFC_circ <=-0.5)&(CD42neg_CD42pos_LFC$LFC_lin <=-0.5),])
+mk_circ_down_lin_equal <- data.frame(CD42neg_CD42pos_LFC[(CD42neg_CD42pos_LFC$LFC_lin <=0.5)&(CD42neg_CD42pos_LFC$LFC_lin >=-0.5)&(CD42neg_CD42pos_LFC$LFC_circ <=-0.5),])
+mk_circ_up_lin_equal <- data.frame(CD42neg_CD42pos_LFC[(CD42neg_CD42pos_LFC$LFC_lin <=0.5)&(CD42neg_CD42pos_LFC$LFC_lin >=-0.5)&(CD42neg_CD42pos_LFC$LFC_circ >=0.5),])
+
+group_expr_circ_lin$group <- "5else"
+group_expr_circ_lin$group[group_expr_circ_lin$ID %in% mk_circ_up_lin_down$ID]="2mk_circ_up_lin_down"
+group_expr_circ_lin$group[group_expr_circ_lin$ID %in% mk_circ_up_lin_up$ID]="4mk_circ_up_lin_up"
+group_expr_circ_lin$group[group_expr_circ_lin$ID %in% mk_circ_down_lin_down$ID]="1mk_circ_down_lin_down"
+#group_expr_circ_lin$group[group_expr_circ_lin$ID %in% mk_circ_down_lin_equal$ID]="mk_circ_down_lin_equal"
+group_expr_circ_lin$group[group_expr_circ_lin$ID %in% mk_circ_up_lin_equal$ID]="3mk_circ_up_lin_equal"
+
+group_expr_circ_lin$avg_circ <- rowMeans(group_expr_circ_lin[,2:7],na.rm = T)
+
+ggplot(group_expr_circ_lin,aes(x=group,y=log2(avg_circ)))+
+  geom_boxplot()+
+  theme_classic()+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+
+
+
+```{r outputing changes in mRNA and circRNA heatmap}
+
+## Several biologists asked us for a heatmap to better visuallize the chnages in mRNA and circRNA expression ##
+## As its a nice idea, we did just that ##
+
+## First we correct the lin RNA counts from DCC for sequencing depth ##
+
+DCC_MK_lin$CD42neg_1_lin <- (DCC_MK_lin$CD42neg_1_lin/73893274)*1000000
+DCC_MK_lin$CD42neg_2_lin <- (DCC_MK_lin$CD42neg_2_lin/106969774)*1000000
+DCC_MK_lin$CD42neg_3_lin <- (DCC_MK_lin$CD42neg_3_lin/69632408)*1000000
+
+DCC_MK_lin$CD42pos_1_lin <- (DCC_MK_lin$CD42pos_1_lin/52413968)*1000000
+DCC_MK_lin$CD42pos_2_lin <- (DCC_MK_lin$CD42pos_2_lin/74197986)*1000000
+DCC_MK_lin$CD42pos_3_lin <- (DCC_MK_lin$CD42pos_3_lin/70753502)*1000000
+
+
+MK_lin_HC_circ_c <- DCC_CE_MK_HC_c[1:7]
+colnames(MK_lin_HC_circ_c)[2:7] <- paste0(colnames(MK_lin_HC_circ_c[2:7]),"_circ")
+MK_lin_HC_circ_c <- merge(MK_lin_HC_circ_c,DCC_MK_lin,by="ID",all.x=T)
+
+
+## averaging stuff per populations ##
+MK_lin_HC_circ_c$avg_CD42neg_circ <- (MK_lin_HC_circ_c$CD42neg_1_circ + MK_lin_HC_circ_c$CD42neg_2_circ + MK_lin_HC_circ_c$CD42neg_3_circ)/3 
+MK_lin_HC_circ_c$avg_CD42pos_circ <- (MK_lin_HC_circ_c$CD42pos_1_circ + MK_lin_HC_circ_c$CD42pos_2_circ + MK_lin_HC_circ_c$CD42pos_3_circ)/3
+
+
+MK_lin_HC_circ_c$avg_CD42neg_lin <- (MK_lin_HC_circ_c$CD42neg_1_lin + MK_lin_HC_circ_c$CD42neg_2_lin + MK_lin_HC_circ_c$CD42neg_3_lin)/3
+MK_lin_HC_circ_c$avg_CD42pos_lin <- (MK_lin_HC_circ_c$CD42pos_1_lin + MK_lin_HC_circ_c$CD42pos_2_lin + MK_lin_HC_circ_c$CD42pos_3_lin)/3
+
+dim(MK_lin_HC_circ_c)
+
+## Calculating LFC ##
+MK_lin_HC_circ_c$LFC_circ <- log2(MK_lin_HC_circ_c$avg_CD42pos_circ) - log2(MK_lin_HC_circ_c$avg_CD42neg_circ)
+MK_lin_HC_circ_c$LFC_lin <- log2(MK_lin_HC_circ_c$avg_CD42pos_lin) - log2(MK_lin_HC_circ_c$avg_CD42neg_lin)
+
+MK_lin_HC_circ_c <- subset(MK_lin_HC_circ_c,abs(MK_lin_HC_circ_c$LFC_circ)>=1)
+MK_lin_HC_circ_c <- MK_lin_HC_circ_c[order(MK_lin_HC_circ_c$avg_CD42pos_lin,decreasing = T ),]
+
+pheatmap(MK_lin_HC_circ_c[14:17], col_fun(seq(-5,5,by=0.01)) ,scale = "row",
+         clustering_distance_cols = "canberra", cluster_cols = F, cluster_rows = F,
+         border_color = NA, labels_col=colnames(MK_lin_HC_circ_c[14:17]),fontsize_row=0.1,
+         clustering_distance_rows = "canberra", gaps_col = c(2,2))
+
+
+```
+
+
+
+# Ribo TPM versus RNA-seq TPM : translation efficiency
+## Getting Ribo-TPM 
+```{r Getting ribo-TPM}
+
+## Here we import the ribo-seq TPMs outputted by Salmon ##
+## See paper methods for details https://doi.org/10.1101/2020.10.22.348276 ## 
+
+
+dir <- "./RiboSeq_MK/"
+Samples <- c("C1MK42neg.fq","C2MK42neg.fq","C3MK42neg.fq",
+             "C1MK42pos.fq","C2MK42pos.fq","C3MK42pos.fq")
+
+head(samples)
+files_ribo_TPM <- file.path(dir, Samples, "quant.sf")
+#Here giving the right names for the sample names from the sample file
+names(files_ribo_TPM) <- paste0(Samples)
+files_ribo_TPM
+
+allData_ribo <- lapply(files_ribo_TPM, function(.file){
+  
+   dat<-read.delim(.file, header=T,sep = "\t")
+   dat<-dat[,c(-2,-3,-5)]
+   dat <- dat[,1:2]
+   dat    # return the dataframe
+}) 
+# From Salmon output
+# column 1: Name (Tx ID)
+# column 2: Length
+# column 3: EffectiveLength
+# column 4: TPM
+# column 5: NumReads
+
+ribo_TPM <- do.call(cbind, allData_ribo) ## binding dataframe list together in one df
+ribo_TPM$ID <- ribo_TPM$C1MK42neg.fq.Name
+ribo_TPM <- ribo_TPM[, -grep("Name", colnames(ribo_TPM))] ## Selecting only the TPMs
+colnames(ribo_TPM) <-  c("C1MK42neg_ribo","C2MK42neg_ribo","C3MK42neg_ribo","C1MK42pos_ribo","C2MK42pos_ribo","C3MK42pos_ribo","ID")
+
+## Getting annotations from Ensembl ## 
+ensembl = useMart(biomart="ensembl", dataset="hsapiens_gene_ensembl", host = "http://apr2018.archive.ensembl.org")
+
+tx2gene <- getBM(attributes=c( "ensembl_transcript_id_version","ensembl_gene_id"), mart = ensembl)
+colnames(tx2gene) <- c("Tx_ID","Gene_ID")
+
+annotations <- getBM(attributes=c("ensembl_gene_id","external_gene_name"), mart = ensembl)
+dim(annotations)
+annotations <- distinct(annotations, ensembl_gene_id , .keep_all = T)
+dim(annotations)
+
+annotations <- merge(tx2gene,annotations,by.x="Gene_ID",by.y = "ensembl_gene_id", all.x = T) 
+dim(annotations)
+
+
+### merging gene info with TPMs ###
+ribo_TPM_annotated <- merge(ribo_TPM, annotations, by.y="Tx_ID", by.x="ID", all.x=T)
+dim(ribo_TPM_annotated)
+ribo_TPM_annotated <- ddply(ribo_TPM_annotated,"external_gene_name", numcolwise(sum)) # Here we sum up the TPM per gene (as circRNA info will be merged per gene)
+dim(ribo_TPM_annotated)
+
+
+```
+
+
+### Getting RNA-TPM 
+```{r Getting RNA-TPM}
+
+## Here we import the mRNA TPMs outputted by Salmon ##
+## See paper methods for details https://doi.org/10.1101/2020.10.22.348276 ## 
+
+dir <- "./mRNA_MK_salmon"
+Samples <- c("C1MK42neg_R1.fastq","C2MK42neg_R1.fastq","C3MK42neg_R1.fastq",
+             "C1MK42pos_R1.fastq","C2MK42pos_R1.fastq","C3MK42pos_R1.fastq")
+
+head(samples)
+files_RNA_TPM <- file.path(dir, Samples, "quant.sf")
+#Here giving the right names for the sample names from the sample file
+names(files_RNA_TPM) <- paste0(Samples)
+files_RNA_TPM
+
+allData_RNA <- lapply(files_RNA_TPM, function(.file){
+  
+   dat<-read.delim(.file, header=T,sep = "\t")
+   dat<-dat[,c(-2,-3,-5)]
+   dat <- dat[,1:2]
+   dat    # return the dataframe
+}) 
+# From Salmon output
+# column 1: Name (Tx ID)
+# column 2: Length
+# column 3: EffectiveLength
+# column 4: TPM
+# column 5: NumReads
+
+RNA_TPM <- do.call(cbind, allData_RNA)
+RNA_TPM$ID <- RNA_TPM$C1MK42neg_R1.fastq.Name
+RNA_TPM <- RNA_TPM[, -grep("Name", colnames(RNA_TPM))]
+colnames(RNA_TPM) <-  c("C1MK42neg_RNA","C2MK42neg_RNA","C3MK42neg_RNA","C1MK42pos_RNA","C2MK42pos_RNA","C3MK42pos_RNA","ID")
+
+
+### merging gene info with TPM ###
+RNA_TPM_annotated <- merge(RNA_TPM, annotations, by.y="Tx_ID", by.x="ID", all.x=T)
+dim(RNA_TPM_annotated)
+RNA_TPM_annotated <- ddply(RNA_TPM_annotated,"external_gene_name", numcolwise(sum))
+dim(RNA_TPM_annotated)
+
+
+```
+
+
+### Translation efficiency 
+```{r Translation efficiency}
+
+## Here we will compute the translation efficiency (TE) per gene ## 
+## See paper methods for details https://doi.org/10.1101/2020.10.22.348276 ## 
+
+TE_TPM <- merge(RNA_TPM_annotated,ribo_TPM_annotated, by="external_gene_name",all=T)
+dim(TE_TPM)
+
+## TE per samples ## 
+TE_TPM$TE_C1MK42neg <- TE_TPM$C1MK42neg_ribo / TE_TPM$C1MK42neg_RNA
+TE_TPM$TE_C2MK42neg <- TE_TPM$C2MK42neg_ribo / TE_TPM$C2MK42neg_RNA
+TE_TPM$TE_C3MK42neg <- TE_TPM$C3MK42neg_ribo / TE_TPM$C3MK42neg_RNA
+
+TE_TPM$TE_C1MK42pos <- TE_TPM$C1MK42pos_ribo / TE_TPM$C1MK42pos_RNA
+TE_TPM$TE_C2MK42pos <- TE_TPM$C2MK42pos_ribo / TE_TPM$C2MK42pos_RNA
+TE_TPM$TE_C3MK42pos <- TE_TPM$C3MK42pos_ribo / TE_TPM$C3MK42pos_RNA
+
+## averages per populations ##
+# TE #
+TE_TPM$TE_avg_CD42neg <- (TE_TPM$TE_C1MK42neg + TE_TPM$TE_C2MK42neg + TE_TPM$TE_C3MK42neg )/3
+TE_TPM$TE_avg_CD42pos <- (TE_TPM$TE_C1MK42pos + TE_TPM$TE_C2MK42pos + TE_TPM$TE_C3MK42pos )/3
+
+# Ribo-seq #
+TE_TPM$avg_MK42neg_ribo <- (TE_TPM$C1MK42neg_ribo + TE_TPM$C2MK42neg_ribo + TE_TPM$C3MK42neg_ribo)/3
+TE_TPM$avg_MK42pos_ribo <- (TE_TPM$C1MK42pos_ribo + TE_TPM$C2MK42pos_ribo + TE_TPM$C3MK42pos_ribo)/3
+
+# mRNA #
+TE_TPM$avg_MK42neg_RNA <- (TE_TPM$C1MK42neg_RNA + TE_TPM$C2MK42neg_RNA + TE_TPM$C3MK42neg_RNA)/3
+TE_TPM$avg_MK42pos_RNA <- (TE_TPM$C1MK42pos_RNA + TE_TPM$C2MK42pos_RNA + TE_TPM$C3MK42pos_RNA)/3
+
+## LFCs ##
+TE_TPM$LFC_TE <- log2(TE_TPM$TE_avg_CD42pos) - log2(TE_TPM$TE_avg_CD42neg)
+
+TE_TPM$LFC_ribo <- log2(TE_TPM$avg_MK42pos_ribo) - log2(TE_TPM$avg_MK42neg_ribo)
+
+TE_TPM$LFC_RNA <- log2(TE_TPM$avg_MK42pos_RNA) - log2(TE_TPM$avg_MK42neg_RNA)
+
+
+
+## Plotting stuff ## 
+ggplot(TE_TPM, aes(x=(LFC_RNA),y=(LFC_ribo)))+
+  geom_point(color="grey")+
+  geom_hline(yintercept = 0)+
+  geom_point(data=TE_TPM[TE_TPM$external_gene_name %in% DCC_CE_MK_HC_annotated$geneName,],color="red")+
+  geom_smooth(color="black", method = "lm")+
+  geom_smooth(data=TE_TPM[TE_TPM$external_gene_name %in% DCC_CE_MK_HC_annotated$geneName,],color="darkred", method = "lm")+
+  theme_classic()+
+  geom_hline(yintercept = 0)+
+  geom_vline(xintercept = 0)+
+  scale_x_continuous(limits = c(-5,5), expand = c(0,0))+
+  scale_y_continuous(limits = c(-5,5), expand = c(0,0))+
+  theme(aspect.ratio = 1)
+
+
+
+ggplot(TE_TPM, aes(x=(LFC_RNA),y=(LFC_TE)))+
+  geom_point(color="grey")+
+  geom_hline(yintercept = 0)+
+  geom_point(data=TE_TPM[TE_TPM$external_gene_name %in% DCC_CE_MK_HC_annotated$geneName,],color="red")+
+  geom_smooth(color="black", method = "lm")+
+  geom_smooth(data=TE_TPM[TE_TPM$external_gene_name %in% DCC_CE_MK_HC_annotated$geneName,],color="darkred", method = "lm")+
+  theme_classic()+
+  geom_hline(yintercept = 0)+
+  geom_vline(xintercept = 0)+
+  scale_x_continuous(limits = c(-5,5), expand = c(0,0))+
+  scale_y_continuous(limits = c(-5,5), expand = c(0,0))+
+  theme(aspect.ratio = 1)
+
+
+ggplot(TE_TPM, aes(x=(LFC_RNA),y=(LFC_TE)))+
+  geom_point(color="grey")+
+  geom_hline(yintercept = 0)+
+  geom_point(data=TE_TPM[abs(TE_TPM$LFC_TE)>2,],color="darkblue",alpha=0.5)+
+  geom_point(data=TE_TPM[TE_TPM$external_gene_name %in% DCC_CE_MK_HC_annotated$geneName,],color="red",alpha=0.6)+
+  geom_smooth(color="black", method = "lm")+
+  geom_smooth(data=TE_TPM[TE_TPM$external_gene_name %in% DCC_CE_MK_HC_annotated$geneName,],color="darkred", method = "lm")+
+  theme_classic()+
+  geom_hline(yintercept = 0)+
+  geom_vline(xintercept = 0)+
+  scale_x_continuous(limits = c(-5,5), expand = c(0,0))+
+  scale_y_continuous(limits = c(-5,5), expand = c(0,0))+
+  theme(aspect.ratio = 1)
+
+
+dim(TE_TPM)
+dim(subset(TE_TPM, abs(TE_TPM$LFC_TE)>2))
+1942/35337*100 # 1942 / 549% of genes have LFC TE >2
+
+
+
+ggplot(TE_TPM, aes(x=log2(C1MK42neg_RNA),y=log2(TE_avg_CD42neg)))+
+  geom_point(color="grey", alpha=0.5)+
+  geom_point(data=TE_TPM[TE_TPM$external_gene_name %in% DCC_CE_MK_HC_annotated$geneName,],color="red", alpha=0.5)+
+  geom_smooth(color="black", method = "lm")+
+  geom_smooth(data=TE_TPM[TE_TPM$external_gene_name %in% DCC_CE_MK_HC_annotated$geneName,],color="red", method = "lm")+
+  ggrepel::geom_text_repel(data=TE_TPM[(TE_TPM$external_gene_name %in% DCC_CE_MK_HC_annotated$geneName) & log2(TE_TPM$TE_avg_CD42neg)>=3,], aes(label=external_gene_name))+
+  theme_classic()+
+  geom_hline(yintercept = 0)+
+  geom_vline(xintercept = 0)+
+  theme(aspect.ratio = 1)
+
+
+ggplot(TE_TPM, aes(x=log2(C1MK42pos_RNA),y=log2(TE_avg_CD42pos)))+
+  geom_point(color="grey", alpha=0.5)+
+  geom_point(data=TE_TPM[TE_TPM$external_gene_name %in% DCC_CE_MK_HC_annotated$geneName,],color="#c0392b", alpha=0.5)+
+  geom_smooth(color="black", method = "lm")+
+  geom_smooth(data=TE_TPM[TE_TPM$external_gene_name %in% DCC_CE_MK_HC_annotated$geneName,],color="red", method = "lm")+
+  ggrepel::geom_text_repel(data=TE_TPM[(TE_TPM$external_gene_name %in% DCC_CE_MK_HC_annotated$geneName) & abs(log2(TE_TPM$TE_avg_CD42pos))>=3,], aes(label=external_gene_name))+
+  theme_classic()+
+  geom_hline(yintercept = 0)+
+  geom_vline(xintercept = 0)+
+  theme(aspect.ratio = 1)
+
+
+
+ggplot(TE_TPM, aes(x=log2(C1MK42pos_RNA),y=log2(TE_avg_CD42pos)))+
+  geom_point(color="grey", alpha=0.5)+
+  #geom_point(data=TE_TPM[TE_TPM$external_gene_name %in% DCC_CE_MK_HC_annotated$geneName,],color="#c0392b", alpha=0.5)+
+  geom_point(data=TE_TPM[TE_TPM$external_gene_name %in% CD42neg_vs_CD42pos_DE_circ$geneName,],color="#2980b9", alpha=0.5)+
+  geom_smooth(color="black", method = "lm")+
+  geom_smooth(data=TE_TPM[TE_TPM$external_gene_name %in% CD42neg_vs_CD42pos_DE_circ$geneName,],color="#2980b9", alpha=0.5, method = "lm")+
+  #geom_smooth(data=TE_TPM[TE_TPM$external_gene_name %in% DCC_CE_MK_HC_annotated$geneName,],color="red", method = "lm")+
+  #ggrepel::geom_text_repel(data=TE_TPM[(TE_TPM$external_gene_name %in% DCC_CE_MK_HC_annotated$geneName) & abs(log2(TE_TPM$TE_avg_CD42pos))>=3,], aes(label=external_gene_name))+
+  theme_classic()+
+  geom_hline(yintercept = 0)+
+  geom_vline(xintercept = 0)+
+  theme(aspect.ratio = 1)
+
+```
+
+
+### CircRNA expression versus translation efficiency
+```{r CircRNA expression versus translation efficiency}
+## Here we compare the TE with circRNA expression ## 
+
+## Importing and merging of TE info with circRNA info ##
+dim(DCC_CE_MK_HC_c)
+TE_TPM_circRNA_HC <- merge(TE_TPM,DCC_CE_MK_HC_c,by.x="external_gene_name",by.y="geneName",all.x=T, all.y=T)
+dim(TE_TPM_circRNA_HC)
+
+TE_TPM_circRNA_HC$MK42neg_avg_circ <- (TE_TPM_circRNA_HC$CD42neg_1 + TE_TPM_circRNA_HC$CD42neg_2 + TE_TPM_circRNA_HC$CD42neg_3)/3
+TE_TPM_circRNA_HC$MK42pos_avg_circ <- (TE_TPM_circRNA_HC$CD42pos_1 + TE_TPM_circRNA_HC$CD42pos_2 + TE_TPM_circRNA_HC$CD42pos_3)/3
+
+
+TE_TPM_circRNA_HC$LFC_circRNA <- log2(TE_TPM_circRNA_HC$MK42pos_avg_circ)- log2(TE_TPM_circRNA_HC$MK42neg_avg_circ)
+
+TE_TPM_circRNA_HC <- do.call(data.frame,lapply(TE_TPM_circRNA_HC, function(x) replace(x, is.infinite(x),NA))) # Super awesome function to change "Inf" and "-Inf" into "NA"
+TE_TPM_circRNA_HC[is.na(TE_TPM_circRNA_HC)]=NA 
+
+
+## Making pretty plots ##
+ggplot(TE_TPM_circRNA_HC, aes(x=log10(MK42neg_avg_circ),y=log10(TE_avg_CD42neg)))+
+  geom_point(color="black", alpha=0.2)+
+  #geom_point(data=TE_TPM_circRNA_HC[(TE_TPM_circRNA_HC$TE_avg_CD42pos>2) | (TE_TPM_circRNA_HC$TE_avg_CD42pos<0.5) ,],color="blue", alpha=0.6)+
+  geom_smooth(color="dark red", method = "lm")+
+  theme_classic()+
+  scale_x_continuous(limits = c(-2.5,1), expand = c(0,0))+
+  scale_y_continuous(limits = c(-2.5,2.5), expand = c(0,0))+
+  geom_hline(yintercept = 0)+
+  #geom_vline(xintercept = 0)+
+  theme(aspect.ratio = 1)
+
+
+ggplot(TE_TPM_circRNA_HC, aes(x=log10(MK42pos_avg_circ),y=log10(TE_avg_CD42pos)))+
+  geom_point(color="black", alpha=0.2)+
+  #geom_point(data=TE_TPM_circRNA_HC[(TE_TPM_circRNA_HC$TE_avg_CD42pos>2) | (TE_TPM_circRNA_HC$TE_avg_CD42pos<0.5) ,],color="blue", alpha=0.6)+
+  geom_smooth(color="dark red", method = "lm")+
+  theme_classic()+
+  scale_x_continuous(limits = c(-2.5,1), expand = c(0,0))+
+  scale_y_continuous(limits = c(-2.5,2.5), expand = c(0,0))+
+  geom_hline(yintercept = 0)+
+  #geom_vline(xintercept = 0)+
+  theme(aspect.ratio = 1)
+
+
+ggplot(TE_TPM_circRNA_HC, aes(x=LFC_circRNA,y=LFC_TE))+
+  geom_point(color="red", alpha=0.6)+
+  geom_point(data=subset(TE_TPM_circRNA_HC, (TE_TPM_circRNA_HC$LFC_TE>1 | TE_TPM_circRNA_HC$LFC_TE< -1) & abs(TE_TPM_circRNA_HC$LFC_circRNA>1)),color="blue", alpha=0.6)+
+  geom_smooth(color="dark red", method = "lm")+
+  theme_classic()+
+  scale_x_continuous(limits = c(-2,6), expand = c(0,0))+
+  scale_y_continuous(limits = c(-5,5), expand = c(0,0))+
+  geom_hline(yintercept = 0)+
+  geom_hline(yintercept = -1)+
+  geom_hline(yintercept = 1)+
+  geom_vline(xintercept = 0)+
+  geom_vline(xintercept = -1)+
+  geom_vline(xintercept = 1)+
+  ggrepel::geom_text_repel(data=TE_TPM_circRNA_HC[abs(TE_TPM_circRNA_HC$LFC_TE)>1.5 & abs(TE_TPM_circRNA_HC$LFC_circRNA>1),], aes(label=external_gene_name), min.segment.length = 0.001)+
+ # ggrepel::geom_text_repel(data=TE_TPM_circRNA_HC[TE_TPM_circRNA_HC$external_gene_name=="OMA1" |TE_TPM_circRNA_HC$external_gene_name=="DIAPH1",], aes(label=external_gene_name), min.segment.length = 0.001)+
+  theme(aspect.ratio = 1)
+
+
+
+## Identifying groups ##
+
+dim(distinct(subset(TE_TPM_circRNA_HC, TE_TPM_circRNA_HC$LFC_TE>1 | TE_TPM_circRNA_HC$LFC_TE< -1),ID)) # 84 circRNA with LFC >1
+
+dim(distinct(subset(TE_TPM_circRNA_HC, TE_TPM_circRNA_HC$LFC_TE>2 | TE_TPM_circRNA_HC$LFC_TE< -2),ID)) # 9 circRNA with LFC >2
+9/2531*100 # 0.35% of circRNAs have LFC TE >2
+
+
+dim(distinct(subset(TE_TPM_circRNA_HC, (TE_TPM_circRNA_HC$LFC_TE>1 | TE_TPM_circRNA_HC$LFC_TE< -1) & abs(TE_TPM_circRNA_HC$LFC_circRNA>1)),ID)) # 57 circRNA with LFC TE > 1 and LFC circRNA >1 
+
+dim(distinct(subset(TE_TPM_circRNA_HC, (TE_TPM_circRNA_HC$LFC_TE>2 | TE_TPM_circRNA_HC$LFC_TE< -2) & abs(TE_TPM_circRNA_HC$LFC_circRNA>1)),ID)) # 6 circRNA with LFC TE > 1 and LFC circRNA >1 
+6/2531*100 # 0.23706 % of circRNA have their mRNA TE affected by circRNA expression
+
+dim(distinct(subset(TE_TPM_circRNA_HC, (TE_TPM_circRNA_HC$LFC_TE>2 | TE_TPM_circRNA_HC$LFC_TE< -2) & (TE_TPM_circRNA_HC$MK42neg_avg_circ>0 & TE_TPM_circRNA_HC$MK42pos_avg_circ>0) ),external_gene_name)) # 4 circRNA-expressing genes with LFC TE >2
+
+
+
+ggplot(TE_TPM_circRNA_HC, aes(x=LFC_circRNA,y=LFC_TE))+
+  geom_point(color="red", alpha=0.6)+
+  geom_point(data=subset(TE_TPM_circRNA_HC, abs(TE_TPM_circRNA_HC$LFC_TE)>2 & (TE_TPM_circRNA_HC$LFC_RNA<2) & abs(TE_TPM_circRNA_HC$LFC_circRNA>1)),color="blue", alpha=0.6)+
+  geom_smooth(color="dark red", method = "lm")+
+  theme_classic()+
+  scale_x_continuous(limits = c(-2,6), expand = c(0,0))+
+  scale_y_continuous(limits = c(-5,5), expand = c(0,0))+
+  geom_hline(yintercept = 0)+
+  geom_hline(yintercept = -2)+
+  geom_hline(yintercept = 2)+
+  geom_vline(xintercept = 0)+
+  geom_vline(xintercept = -1)+
+  geom_vline(xintercept = 1)+
+  ggrepel::geom_text_repel(data=subset(TE_TPM_circRNA_HC, abs(TE_TPM_circRNA_HC$LFC_TE)>2 & (TE_TPM_circRNA_HC$LFC_RNA<2) & abs(TE_TPM_circRNA_HC$LFC_circRNA>1)), aes(label=external_gene_name), min.segment.length = 0.001)+
+ # ggrepel::geom_text_repel(data=TE_TPM_circRNA_HC[TE_TPM_circRNA_HC$external_gene_name=="OMA1" |TE_TPM_circRNA_HC$external_gene_name=="DIAPH1",], aes(label=external_gene_name), min.segment.length = 0.001)+
+  theme(aspect.ratio = 1)
+
+#write.table(TE_TPM_circRNA_HC, "circ_mRNA_ribo_TE_MK_combined.csv", sep=";", dec=",",row.names = F)
+
+```
+
+
+```{r TE in point stacked graph}
+## Here we want to compare the TE of genes expression circRNA versus expression ##
+## While the TE of MKs are calculated here, plt are caluclated in another script (see below) ##
+
+### RUN TE_calculation_PLT.Rmd first!!!! ###
+
+
+## Making groups for each population ##
+TE_TPM_circRNA_HC_for_graph1 <- NULL
+TE_TPM_circRNA_HC_for_graph1$ID <- TE_TPM_circRNA_HC$external_gene_name
+TE_TPM_circRNA_HC_for_graph1$group <- "1_CD42neg"
+TE_TPM_circRNA_HC_for_graph1$TE <- TE_TPM_circRNA_HC$TE_avg_CD42neg
+TE_TPM_circRNA_HC_for_graph1$circRNA <- (TE_TPM_circRNA_HC$CD42neg_1 + TE_TPM_circRNA_HC$CD42neg_2 + TE_TPM_circRNA_HC$CD42neg_3)/3
+TE_TPM_circRNA_HC_for_graph1 <- data.frame(TE_TPM_circRNA_HC_for_graph1)
+
+
+TE_TPM_circRNA_HC_for_graph2 <- NULL
+TE_TPM_circRNA_HC_for_graph2$ID <- TE_TPM_circRNA_HC$external_gene_name
+TE_TPM_circRNA_HC_for_graph2$group <- "3_CD42pos"
+TE_TPM_circRNA_HC_for_graph2$TE <- TE_TPM_circRNA_HC$TE_avg_CD42pos
+TE_TPM_circRNA_HC_for_graph2$circRNA <- (TE_TPM_circRNA_HC$CD42pos_1 + TE_TPM_circRNA_HC$CD42pos_2 + TE_TPM_circRNA_HC$CD42pos_3)/3
+TE_TPM_circRNA_HC_for_graph2 <- data.frame(TE_TPM_circRNA_HC_for_graph2)
+
+PLT_data_for_graph <- NULL
+PLT_data_for_graph$ID <- PLT_mRNA_ribo_geneLevel_circRNA$external_gene_name
+PLT_data_for_graph$group <- "5_PLT"
+PLT_data_for_graph$TE <- PLT_mRNA_ribo_geneLevel_circRNA$TE_PLT
+PLT_data_for_graph$circRNA <- PLT_mRNA_ribo_geneLevel_circRNA$avg_circRNA
+PLT_data_for_graph <- data.frame(PLT_data_for_graph)
+
+## getting stuff together ##
+TE_TPM_circRNA_HC_for_graph <- rbind.data.frame(TE_TPM_circRNA_HC_for_graph1,TE_TPM_circRNA_HC_for_graph2,PLT_data_for_graph)
+
+## Making sure we have compatible value for ggplot to plot ##
+TE_TPM_circRNA_HC_for_graph[is.na(TE_TPM_circRNA_HC_for_graph)]=0
+TE_TPM_circRNA_HC_for_graph$TE <- gsub("Inf","",TE_TPM_circRNA_HC_for_graph$TE)
+TE_TPM_circRNA_HC_for_graph$TE <- gsub("NaN","",TE_TPM_circRNA_HC_for_graph$TE)
+
+## assigning circRNA-expressing gene groups ##
+TE_TPM_circRNA_HC_for_graph_circ_42neg <- subset(TE_TPM_circRNA_HC_for_graph, TE_TPM_circRNA_HC_for_graph$group=="1_CD42neg" & TE_TPM_circRNA_HC_for_graph$circRNA>0)
+
+TE_TPM_circRNA_HC_for_graph_circ_42pos <- subset(TE_TPM_circRNA_HC_for_graph, TE_TPM_circRNA_HC_for_graph$group=="3_CD42pos" & TE_TPM_circRNA_HC_for_graph$circRNA>0)
+
+TE_TPM_circRNA_HC_for_graph_circ_PLT <- subset(TE_TPM_circRNA_HC_for_graph, TE_TPM_circRNA_HC_for_graph$group=="5_PLT" & TE_TPM_circRNA_HC_for_graph$circRNA>0)
+
+
+TE_TPM_circRNA_HC_for_graph_circ_42neg$group <- "2_CD42neg_circRNA"
+TE_TPM_circRNA_HC_for_graph_circ_42pos$group <- "4_CD42pos_circRNA"
+TE_TPM_circRNA_HC_for_graph_circ_PLT$group <- "6_PLT_circRNA"
+
+## merging things together ## 
+TE_TPM_circRNA_HC_for_graph <- rbind.data.frame(TE_TPM_circRNA_HC_for_graph,TE_TPM_circRNA_HC_for_graph_circ_42neg,TE_TPM_circRNA_HC_for_graph_circ_42pos,TE_TPM_circRNA_HC_for_graph_circ_PLT)
+
+TE_TPM_circRNA_HC_for_graph$TE <- as.numeric(TE_TPM_circRNA_HC_for_graph$TE) # Making sure stuff are numerical
+#TE_TPM_circRNA_HC_for_graph[is.na(TE_TPM_circRNA_HC_for_graph)]=0
+
+
+## plotting things ##
+ggplot(TE_TPM_circRNA_HC_for_graph, aes(y=log10(TE),x=group))+
+  geom_point(position="jitter",color="black", alpha=0.05)+
+  stat_summary(fun = median, fun.min = median, fun.max = median,
+               geom = "crossbar", width = 0.5, color="red")+
+  scale_y_continuous(limits = c(-4,4), expand = c(0,0))+
+  theme_minimal()+ 
+  theme(aspect.ratio = 1.5)
+  
+  
+
+ggplot(TE_TPM_circRNA_HC_for_graph, aes(y=log10(TE),x=group))+
+  geom_boxplot(color="black", alpha=0.1)+
+  stat_summary(fun = median, fun.min = median, fun.max = median,
+               geom = "crossbar", width = 0.5, color="red")+
+  scale_y_continuous(limits = c(-4,4), expand = c(0,0))+
+  theme_minimal()+ 
+  theme(aspect.ratio = 1.5)
+  
+  
+
+
+  
+ggplot(TE_TPM_circRNA_HC_for_graph[TE_TPM_circRNA_HC_for_graph$group=="1_CD42neg" | TE_TPM_circRNA_HC_for_graph$group=="2_CD42neg_circRNA",], aes(x=log10(TE),fill=group))+
+  geom_density(alpha=0.5)+
+  scale_x_continuous(limits=c(-2.5,2.5))
+
+
+ggplot(TE_TPM_circRNA_HC_for_graph[TE_TPM_circRNA_HC_for_graph$group=="3_CD42pos" | TE_TPM_circRNA_HC_for_graph$group=="4_CD42pos_circRNA",], aes(x=log10(TE),fill=group))+
+  geom_density(alpha=0.5)+
+  scale_x_continuous(limits=c(-2.5,2.5))
+
+
+## Stats part ##
+t.test(TE_TPM_circRNA_HC_for_graph[TE_TPM_circRNA_HC_for_graph$group=="3_CD42pos",]$TE,TE_TPM_circRNA_HC_for_graph[TE_TPM_circRNA_HC_for_graph$group=="4_CD42pos_circRNA",]$TE)
+
+#t = 2.1224, df = 36504, p-value = 0.03381
+p.adjust(p=0.03381,n=36504) #1
+
+
+t.test(TE_TPM_circRNA_HC_for_graph[TE_TPM_circRNA_HC_for_graph$group=="1_CD42neg",]$TE,TE_TPM_circRNA_HC_for_graph[TE_TPM_circRNA_HC_for_graph$group=="2_CD42neg_circRNA",]$TE)
+
+# t = 1.666, df = 36471, p-value = 0.09572
+p.adjust(p=0.09572,n=36471) #1
+
+
+
+t.test(TE_TPM_circRNA_HC_for_graph[TE_TPM_circRNA_HC_for_graph$group=="5_PLT",]$TE,TE_TPM_circRNA_HC_for_graph[TE_TPM_circRNA_HC_for_graph$group=="6_PLT_circRNA",]$TE)
+
+# t = 0.27319, df = 9175.9, p-value = 0.7847
+p.adjust(p=0.7847,n=9175.9) #1
+
+
+
+```
+
+
+
+### LFC translation efficiency versus LFC RNA and LFC circRNA
+```{r LFC RNA circRNA TE}
+
+## We now want to see how the LFC of circRNA related to the mRNA or TE ##
+
+TE_TPM_circRNA_HC$avg_mRNA_CD42neg <- (TE_TPM_circRNA_HC$C1MK42neg_RNA + TE_TPM_circRNA_HC$C2MK42neg_RNA + TE_TPM_circRNA_HC$C3MK42neg_RNA)/3
+TE_TPM_circRNA_HC$avg_mRNA_CD42pos <- (TE_TPM_circRNA_HC$C1MK42pos_RNA + TE_TPM_circRNA_HC$C2MK42pos_RNA + TE_TPM_circRNA_HC$C3MK42pos_RNA)/3
+
+TE_TPM_circRNA_HC$avg_ribo_CD42neg <- (TE_TPM_circRNA_HC$C1MK42neg_ribo + TE_TPM_circRNA_HC$C2MK42neg_ribo + TE_TPM_circRNA_HC$C3MK42neg_ribo)/3
+TE_TPM_circRNA_HC$avg_ribo_CD42pos <- (TE_TPM_circRNA_HC$C1MK42pos_ribo + TE_TPM_circRNA_HC$C2MK42pos_ribo + TE_TPM_circRNA_HC$C3MK42pos_ribo)/3
+
+TE_TPM_circRNA_HC$LFC_RNA <- (log2(TE_TPM_circRNA_HC$avg_mRNA_CD42pos)-log2(TE_TPM_circRNA_HC$avg_mRNA_CD42neg))
+
+TE_TPM_circRNA_HC$LFC_ribo <- (log2(TE_TPM_circRNA_HC$avg_ribo_CD42pos)-log2(TE_TPM_circRNA_HC$avg_ribo_CD42neg))
+
+TE_TPM_circRNA_HC$LFC_circRNA <- (log2(TE_TPM_circRNA_HC$MK42pos_avg_circ)-log2(TE_TPM_circRNA_HC$MK42neg_avg_circ))
+
+TE_TPM_circRNA_HC$LFC_TE <- (log2(TE_TPM_circRNA_HC$TE_avg_CD42pos)-log2(TE_TPM_circRNA_HC$TE_avg_CD42neg))
+
+
+dim(TE_TPM_circRNA_HC)
+
+ggplot(TE_TPM_circRNA_HC,aes(x=LFC_circRNA,y=LFC_TE))+
+  geom_point(color="grey")+
+  geom_smooth(method=lm)+
+  ggrepel::geom_text_repel(data=TE_TPM_circRNA_HC[abs(TE_TPM_circRNA_HC$LFC_TE)>1 & abs(TE_TPM_circRNA_HC$LFC_circRNA)>1,],aes(label=external_gene_name), force = 20, min.segment.length = 0.01)+
+  geom_point(data = TE_TPM_circRNA_HC[abs(TE_TPM_circRNA_HC$LFC_TE)>1 & abs(TE_TPM_circRNA_HC$LFC_circRNA)>1,],color="red")+
+  scale_y_continuous(limits = c(-5,5))+
+  theme_classic()+
+  theme(aspect.ratio = 1)+
+  geom_hline(yintercept = 1)+
+  geom_hline(yintercept = -1)+
+  geom_vline(xintercept = 1)+
+  geom_vline(xintercept = -1)
+
+dim(TE_TPM_circRNA_HC[!is.na(TE_TPM_circRNA_HC$exonSizes),])
+TEhi_circRNAhi <- TE_TPM_circRNA_HC
+TEhi_circRNAhi <- do.call(data.frame,lapply(TEhi_circRNAhi, function(x) replace(x, is.infinite(x),NA)))
+TEhi_circRNAhi$LFC_circRNA[is.na(TEhi_circRNAhi$LFC_circRNA)]=0
+TEhi_circRNAhi <- subset(TEhi_circRNAhi,abs(TEhi_circRNAhi$LFC_TE)>1 & abs(TEhi_circRNAhi$LFC_circRNA)>1)
+table(is.na(TEhi_circRNAhi$LFC_circRNA[abs(TEhi_circRNAhi$LFC_TE)>1 & abs(TEhi_circRNAhi$LFC_circRNA)>1]))
+is.infinite(TEhi_circRNAhi$LFC_circRNA)
+
+
+
+ggplot(TE_TPM_circRNA_HC,aes(x=log2(avg_mRNA_CD42pos),y=LFC_TE))+
+  geom_point(color="grey")+
+  scale_y_continuous(limits = c(-10,10))+
+  geom_smooth(method=lm)+
+  ggrepel::geom_text_repel(data=TE_TPM_circRNA_HC[abs(TE_TPM_circRNA_HC$LFC_TE)>1 & abs(TE_TPM_circRNA_HC$LFC_circRNA)>1,],aes(label=external_gene_name), force = 20, min.segment.length = 0.01)+
+  geom_point(data = TE_TPM_circRNA_HC[abs(TE_TPM_circRNA_HC$LFC_TE)>1 & abs(TE_TPM_circRNA_HC$LFC_circRNA)>1,],color="red")+
+  theme_classic()+
+  geom_hline(yintercept = 0)+
+  geom_vline(xintercept = 0)+
+  theme(aspect.ratio = 1)
+
+
+
+ggplot(TE_TPM_circRNA_HC,aes(x=LFC_RNA,y=LFC_ribo))+
+  geom_point(color="grey")+
+  scale_y_continuous(limits = c(-10,10),expand = c(0,0))+
+  scale_x_continuous(limits = c(-10,10),expand = c(0,0))+
+  geom_point(data = TE_TPM_circRNA_HC[TE_TPM_circRNA_HC$external_gene_name %in% DCC_CE_MK_HC_annotated$geneName,],color="red")+
+  geom_smooth(method=lm)+
+  geom_smooth(data = TE_TPM_circRNA_HC[TE_TPM_circRNA_HC$external_gene_name %in% DCC_CE_MK_HC_annotated$geneName,],color="darkred", method="lm")+
+  theme_classic()+
+  geom_hline(yintercept = 0)+
+  geom_vline(xintercept = 0)+
+  theme(aspect.ratio = 1)
+
+
+ggplot(TE_TPM_circRNA_HC,aes(x=LFC_RNA,y=LFC_TE))+
+  geom_point(color="grey")+
+  geom_point(data = TE_TPM_circRNA_HC[TE_TPM_circRNA_HC$external_gene_name %in% DCC_CE_MK_HC_annotated$geneName,],color="red")+
+  geom_smooth(method=lm, color="black")+
+  geom_smooth(method=lm, data = TE_TPM_circRNA_HC[TE_TPM_circRNA_HC$external_gene_name %in% DCC_CE_MK_HC_annotated$geneName,],color="darkred")+
+  theme_classic()+
+  scale_y_continuous(limits = c(-10,10),expand = c(0,0))+
+  scale_x_continuous(limits = c(-10,10),expand = c(0,0))+
+  geom_hline(yintercept = 0)+
+  geom_vline(xintercept = 0)+
+  theme(aspect.ratio = 1)
+
+
+
+random_row <- sample(x=1:dim(TE_TPM_circRNA_HC), size= 2531)
+
+ggplot(TE_TPM_circRNA_HC,aes(x=LFC_RNA,y=LFC_TE))+
+  geom_point(color="grey")+
+  geom_point(data = TE_TPM_circRNA_HC[random_row,],color="blue")+
+  geom_smooth(method=lm, color="black")+
+  geom_smooth(data = TE_TPM_circRNA_HC[random_row,],color="blue",method=lm)+
+  theme_classic()+
+  scale_y_continuous(limits = c(-10,10),expand = c(0,0))+
+  scale_x_continuous(limits = c(-10,10),expand = c(0,0))+
+  geom_hline(yintercept = 0)+
+  geom_vline(xintercept = 0)+
+  theme(aspect.ratio = 1)
+
+
+max(TE_TPM_circRNA_HC$LFC_TE[abs(TE_TPM_circRNA_HC$LFC_TE)<50],na.rm = T) - min(TE_TPM_circRNA_HC$LFC_TE[abs(TE_TPM_circRNA_HC$LFC_TE)<50],na.rm = T) # 29.55101 LFC span
+
+
+max(TE_TPM_circRNA_HC$LFC_TE[abs(TE_TPM_circRNA_HC$LFC_TE)<50 & !is.na(TE_TPM_circRNA_HC$ID)],na.rm = T) - min(TE_TPM_circRNA_HC$LFC_TE[abs(TE_TPM_circRNA_HC$LFC_TE)<50 & !is.na(TE_TPM_circRNA_HC$ID)],na.rm = T) # 5.420267 span
+
+
+
+
+#write.table(TE_TPM_circRNA_HC, "Translation_efficiency_TPM_circRNA_HC.csv",row.names = F,dec = ",", sep = ";")
+
+```
+
+
+# ORF predictions 
+
+## Preparation of fasta for single, double and tripled circRNA sequences ## 
+
+### Fasta import
+```{r Fasta import}
+
+## Here we want to know the ORFs that are found in linear or circRNA sequences ##
+## For this we want to export the RNA sequence in tripled sequences as to mimic a circRNA splice-junction## 
+## Run BEDtools using the BED file generated above first to export the circRNA sequences ##
+
+## BED tools makes a weird fasta format, so first convert in a table format with text-edit! remove \t and add \n instead to make the fasta format a table format ###
+
+Fasta_nt <- read.delim("/home/ben/Analysis/circRNA_erys/circMK/ORF/DCC_CE_MK_HC_BED-tab.fasta",header = F,sep = "\t")
+head(Fasta_nt,1) # Good ? Oh yeah !
+dim(Fasta_nt)
+
+## For ORF prediction, we triple the full circRNA sequence as published by others ##
+Fasta_nt$triple <- paste0(Fasta_nt$double,Fasta_nt$V2)
+Fasta_tripled <- data.frame("ID"=Fasta_nt$V1,"triple"=Fasta_nt$triple)
+Fasta_tripled$ID <- paste0(">",Fasta_tripled$ID)
+
+dim(Fasta_tripled)
+
+write.table(Fasta_tripled,"/home/ben/Analysis/circRNA_erys/circMK/ORF/MK_2531_HC_tripled_spliced_sequence.fasta",sep = "\n",quote = F,row.names = F,col.names = F)
+
+## Now use this to run ORF-finder (NCBI) to get all the predicted ORF for circRNA (tripled sequence) or linRNA (single sequence) ##
+
+
+```
+
+
+## Graphing ORFfinder's output ##
+```{r ORF prediction}
+
+## Now we import the results of ORF-finder ##
+## the fasta format is screwed up for R import as table, so we modify it as text first ##
+
+## First dealing with tripled (circRNA) sequences ##
+MK_HC_ORF_tripled <- readtext::readtext("/home/ben/Analysis/circRNA_erys/circMK/ORF/ORFfinder_output_tripled_MK_2531")
+
+MK_HC_ORF_tripled <- gsub("\\\n","",MK_HC_ORF_tripled)
+MK_HC_ORF_tripled <- gsub(">","\\\n>",MK_HC_ORF_tripled)
+MK_HC_ORF_tripled <- gsub(">lcl\\|","",MK_HC_ORF_tripled)
+
+write(MK_HC_ORF_tripled,"./MK_2531_HC_ORF_tripled_reformated_tab.txt") ## save as text
+MK_HC_ORF_tripled <- read.delim("MK_2531_HC_ORF_tripled_reformated_tab.txt", header = F) # re-import as table : )
+
+## now that we converted stuff in table format we can start treating the IDs and sequences ## 
+MK_HC_ORF_tripled$ID <- word(MK_HC_ORF_tripled$V1,2,sep="_")
+MK_HC_ORF_tripled$ID <- word(MK_HC_ORF_tripled$ID,1,sep="\\):")
+MK_HC_ORF_tripled$ID <- gsub("\\(\\+","",MK_HC_ORF_tripled$ID)
+MK_HC_ORF_tripled$ID <- gsub("\\(\\-","",MK_HC_ORF_tripled$ID)
+
+MK_HC_ORF_tripled$length <- mapply(strsplit(as.character(MK_HC_ORF_tripled$V2),","),FUN=function(x){nchar(x)})
+max(MK_HC_ORF_tripled$length) # Calculating the ORF length 
+
+MK_HC_ORF_tripled$group <- "triple"
+
+MK_HC_ORF_tripled <- distinct(MK_HC_ORF_tripled,V2,.keep_all = T) ## removing doubles (happens when you triple a sequence)
+
+dim(MK_HC_ORF_tripled) # 12567 unique orfs
+dim(distinct(MK_HC_ORF_tripled,ID)) #2488 coding circRNA
+
+mean(MK_HC_ORF_tripled$length) # 115.8561 AA
+median(MK_HC_ORF_tripled$length) # 55 AA
+
+ggplot(MK_HC_ORF_tripled,aes(log2(length)))+
+  geom_histogram(binwidth = 0.1)
+
+
+## Now dealing with single (linRNA) sequence ## 
+
+MK_HC_ORF_once <- readtext::readtext("/home/ben/Analysis/circRNA_erys/circMK/ORF/ORFfinder_output_once_MK_2531")
+
+MK_HC_ORF_once <- gsub("\\\n","",MK_HC_ORF_once)
+MK_HC_ORF_once <- gsub(">","\\\n>",MK_HC_ORF_once)
+MK_HC_ORF_once <- gsub("partialM","partial\\\tM",MK_HC_ORF_once)
+MK_HC_ORF_once <- gsub("productM","product\\\tM",MK_HC_ORF_once)
+MK_HC_ORF_once <- gsub(">lcl\\|","",MK_HC_ORF_once)
+
+write(MK_HC_ORF_once,"./MK_HC_ORF_once_reformated_tab.txt")
+MK_HC_ORF_once <- read.delim("MK_HC_ORF_once_reformated_tab.txt", header = F)
+
+MK_HC_ORF_once$ID <- word(MK_HC_ORF_once$V1,2,sep="_")
+MK_HC_ORF_once$ID <- word(MK_HC_ORF_once$ID,1,sep="\\):")
+MK_HC_ORF_once$ID <- gsub("\\(\\+","",MK_HC_ORF_once$ID)
+MK_HC_ORF_once$ID <- gsub("\\(\\-","",MK_HC_ORF_once$ID)
+
+MK_HC_ORF_once$length <- mapply(strsplit(as.character(MK_HC_ORF_once$V2),","),FUN=function(x){nchar(x)})
+max(MK_HC_ORF_once$length)
+
+MK_HC_ORF_once$group <- "once"
+
+
+MK_HC_ORF_once <- distinct(MK_HC_ORF_once,V2,.keep_all = T)
+dim(MK_HC_ORF_once) # 8519 ORFs
+
+dim(distinct(MK_HC_ORF_once,ID)) # 2371 circRNA with ORF
+mean(MK_HC_ORF_once$length) # 77.29816
+median(MK_HC_ORF_once$length) # 46
+
+ggplot(MK_HC_ORF_once,aes(log2(length)))+
+  geom_histogram(binwidth = 0.1)
+
+ggplot(MK_HC_ORF_tripled,aes(log2(length)))+
+  geom_histogram(binwidth = 0.1)
+
+```
+
+
+## Comparing triple vs once ORFs
+```{r comparing triple vs once ORFs}
+
+## plotting lin vs circ ORF length ##
+
+ggplot(MK_HC_ORF_tripled,aes(log2(length),fill=group))+
+  geom_histogram(binwidth = 0.1, alpha=0.9)+
+  geom_histogram(data=MK_HC_ORF_once,binwidth = 0.1, alpha=0.9)+
+  theme_classic()+
+  scale_y_continuous(expand = c(0,0))+
+  scale_x_continuous(expand = c(0,0))
+
+```
+
+## Graphing lin+cir and circ specific unique ORF
+```{r Graphing lin+cir and circ specific unique ORF }
+## here we select the circ-specific sequences (not contained in lin ORFs) ##
+
+ORF_triple_specific <- subset(MK_HC_ORF_tripled,!(MK_HC_ORF_tripled$V2 %in% MK_HC_ORF_once$V2))
+dim(ORF_triple_specific) # 5008 ORFs specific to circRNA
+dim(distinct(ORF_triple_specific,V2)) # and 5008 of these are unique
+dim(distinct(ORF_triple_specific,ID)) # 2428 circRNA have circ specific circRNA
+mean(ORF_triple_specific$length) # 189.611 AA 
+median(ORF_triple_specific$length) # 109 AA 
+
+
+#339900 green circ only
+#5c168e lin + circ
+
+dim(distinct(MK_HC_ORF_tripled[MK_HC_ORF_tripled$V2 %in% MK_HC_ORF_once$V2,],ID))# 2198 circRNA had lin+circ ORFs
+dim(distinct(MK_HC_ORF_tripled[!MK_HC_ORF_tripled$V2 %in% MK_HC_ORF_once$V2,],ID)) # 2428 circRNA had circ-specific ORFs 
+
+2428/2531*100 # 95.93046% of circRNA have circ-RNA specific ORFs 
+
+ORF_triple_specific <- MK_HC_ORF_tripled[!MK_HC_ORF_tripled$V2 %in% MK_HC_ORF_once$V2,]
+MK_HC_ORF_once <- distinct(MK_HC_ORF_once,V2,.keep_all = T)
+
+linear_ORF <- MK_HC_ORF_tripled[MK_HC_ORF_tripled$V2 %in% MK_HC_ORF_once$V2,]
+linear_ORF <- distinct(linear_ORF,V2,.keep_all = T)
+linear_ORF$group <- "lin+circ"
+dim(distinct(linear_ORF,V2)) # 7559 share circ + lin ORFs
+dim(distinct(linear_ORF,ID)) # of 2198 circ/lin sequences
+dim(linear_ORF)
+mean(linear_ORF$length,na.rm=T) # 66.9918
+median(linear_ORF$length,na.rm=T) # 42
+
+
+## and making pretty plots ##
+ggplot(ORF_triple_specific,aes(log2(length),fill=group))+
+  geom_histogram(data=linear_ORF,binwidth = 0.1,alpha=0.7)+
+  geom_histogram(binwidth = 0.1,alpha=0.7)+
+  theme_classic()+
+  scale_y_continuous(expand = c(0,0))+
+  scale_x_continuous(expand = c(0,0))
+
+## Stats ##
+
+t.test(ORF_triple_specific$length,
+       linear_ORF$length)
+# t = 31.558, df = 5635, p-value < 2.2e-16
+# mean of x = 189.6110  |   mean of y = 66.9918
+
+p.adjust(p=2.2e-16,n=5635) # 1.2397e-12
+
+
+combined_specific_plot <- rbind.data.frame(ORF_triple_specific,linear_ORF)
+combined_specific_plot[is.na(combined_specific_plot)]=""
+
+table(combined_specific_plot$group)
+ggplot(combined_specific_plot,aes(y=log2(length),x=group))+
+  geom_boxplot()+
+  theme_classic()+
+  theme(aspect.ratio = 2)
+
+
+```
+
+
+```{r overlap mk mRNA and plt circRNA }
+
+## Here we want to know the overlapp in circRNA and mRNA expression of Mk and plts ##
+
+## getting and filtering mRNA expression ##
+dim(RNA_TPM_annotated)
+RNA_TPM_annotated_filtered <- RNA_TPM_annotated
+RNA_TPM_annotated_filtered$row_mean <- rowMeans(RNA_TPM_annotated_filtered[2:7])
+RNA_TPM_annotated_filtered <- subset(RNA_TPM_annotated_filtered,RNA_TPM_annotated_filtered$row_mean>1) ## only genes expressed above 1 TPM on average in the population will be kept 
+
+## getting HC circRNa for platelets ## 
+HC_plt <- subset(LC_plt,LC_plt$Plt1>=2 &
+                   LC_plt$Plt2>=2 & 
+                   LC_plt$Plt3>=2)
+
+
+dim(RNA_TPM_annotated_filtered) # 13101 genes expressed at RNA level
+dim(HC_plt) # 10833 circRNa expressin in platelets
+dim(distinct(HC_plt, geneName)) # 3288 circRNA-expressing genes in plts 
+dim(distinct(HC_plt[HC_plt$geneName %in% RNA_TPM_annotated_filtered$external_gene_name,],geneName)) # 3049 circRNA-expressing genes in plts are also found at mRNA level in MK 
+dim(distinct(RNA_TPM_annotated_filtered[RNA_TPM_annotated_filtered$external_gene_name %in% HC_plt$geneName,],external_gene_name)) # same but the other way round 
+
+3049/3288*100 # 92.73114 % overlap in gene 
+
+dim(distinct(HC_plt[HC_plt$geneName %in% RNA_TPM_annotated_filtered$external_gene_name,],ID)) # 10348
+dim(distinct(HC_plt, ID)) # 10729 circRNA
+10348/10729*100 # 96.44888% of circRNA are explained by mRNA exxpression (based on gene annotation)
+10729-10348 # 381 circRNAs are not explained by mRNA levels in MK
+381/10729*100 # 3.55% of plt circRNAs are not explained by mRNA levels in mk
+
+
+## Same stuff for LC circRNA in Plt vs MK mRNA #
+dim(RNA_TPM_annotated_filtered)
+dim(LC_plt)
+dim(distinct(LC_plt,geneName)) # 6516
+dim(LC_plt[LC_plt$geneName %in% RNA_TPM_annotated_filtered$external_gene_name,]) # 44927
+dim(RNA_TPM_annotated_filtered[RNA_TPM_annotated_filtered$external_gene_name %in% LC_plt$geneName,]) # 5698 circRNa in plt also found in mRNA in MK
+5698/6516*100 # that's 87.44629 %
+
+
+
+## PLT circRNA overlap with MK circRNA ##
+
+dim(HC_plt[HC_plt$ID %in% DCC_CE_MK_HC_annotated$ID,]) #1907
+1907/10729*100 # only 17.77426 % of platelets circRNA overlap with circRNA of MK!!
+
+2531-1907 # 624 circRNA in MK only 
+10729-1907 #8822 circRNAs in plt only ... 
+
+
+## lets check the overlap in mRNA between MK and plts ## 
+
+#PLT_mRNA
+RNA_TPM_MK <- RNA_TPM
+RNA_TPM_MK <- subset(RNA_TPM_MK,
+                     RNA_TPM_MK$C1MK42neg_RNA>0.1 |
+                     RNA_TPM_MK$C2MK42neg_RNA>0.1 |
+                     RNA_TPM_MK$C3MK42neg_RNA>0.1 |
+                     RNA_TPM_MK$C1MK42pos_RNA>0.1 |
+                     RNA_TPM_MK$C2MK42pos_RNA>0.1 |
+                     RNA_TPM_MK$C3MK42pos_RNA>0.1)
+
+RNA_TPM_MK$avg <- rowMeans(RNA_TPM_MK[1:6])
+
+dim(PLT_mRNA) #12795
+dim(PLT_mRNA[PLT_mRNA$ID %in% RNA_TPM_MK$ID,]) #11805
+
+11805/12795*100 # 92.2626 % of overlap in mRNA transcript between MK and plt
+
+
+```
+
+
+
+```{r relation of intron retention and circRNA in platelets}
+## this is extra stuff, doesnt appear in our paper, still interesting I thing ##
+
+## we want to see if there is a relation between mRNA intron-retention (IR) and circRNA expression ##
+## The (crude) way to go about it is to look at IR genes and check the overlap with circRNA expressing genes ##
+## for this I got the sup. table of Nassa et al 2018 on IR in platelets ## 
+
+CLR_plt <- read.delim("./Platelets_CLR.csv", sep=";", dec=",") ## our plt info on circRNA expression
+IR_plt <-  read.delim("./Intron_retention_gene_platelets_Nassa_et_al_2018.csv", sep=";", dec=",") ## IR from previous study
+dim(IR_plt) #5628
+
+## Filtering genes with IR over 0 ##
+IR_plt <- subset(IR_plt,IR_plt$Intron_Retention.TO1>0 & 
+                          IR_plt$Intron_Retention.TO2>0 & 
+                          IR_plt$Intron_Retention.TO3>0 )
+
+dim(CLR_plt[CLR_plt$geneName %in% IR_plt$Gene_name,])
+dim(IR_plt[IR_plt$Gene_name %in% CLR_plt$geneName,]) #4229
+
+4229/5628*100 # = 75.14215 % of circRNAs expressing genes are found in intro-retained genes!! 
+## Maybe in a follow-up story ?##
+
+##
+IR_plt_strict <- subset(IR_plt,IR_plt$Intron_Retention.TO1>0.25 & 
+                          IR_plt$Intron_Retention.TO2>0.25& 
+                          IR_plt$Intron_Retention.TO3>0.25 )
+dim(IR_plt_strict) # 
+dim(IR_plt_strict[IR_plt_strict$Gene_name %in% CLR_plt$geneName,]) #
+
+ # =  % of circRNAs expressing genes are found in intro-retained genes. 
+
+
+```
+
