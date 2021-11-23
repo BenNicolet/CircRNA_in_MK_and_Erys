@@ -872,16 +872,16 @@ dim(DCC_CE_lin_circ_mk_HC)
 
 ### CD42- MK ###
 {
-  CD42neg<- NULL
+  CD42neg<- NULL # creating dataframe
   CD42neg$ID <- (DCC_CE_lin_circ_mk_HC$ID)
   CD42neg <- data.frame(CD42neg)
   dim(CD42neg)
   CD42neg$ratio1 <- (((DCC_CE_lin_circ_mk_HC$CD42neg_1)/(DCC_CE_lin_circ_mk_HC$CD42neg_1_lin))) # Making ratios per sample
   CD42neg$ratio2 <- (((DCC_CE_lin_circ_mk_HC$CD42neg_2)/(DCC_CE_lin_circ_mk_HC$CD42neg_2_lin)))
   CD42neg$ratio3 <- (((DCC_CE_lin_circ_mk_HC$CD42neg_3)/(DCC_CE_lin_circ_mk_HC$CD42neg_3_lin)))
-  CD42neg$ratio <- (((CD42neg$ratio1)+(CD42neg$ratio2)+(CD42neg$ratio3))/3)
-  CD42neg$Lin<- (((DCC_CE_lin_circ_mk_HC$CD42neg_1_lin)+(DCC_CE_lin_circ_mk_HC$CD42neg_2_lin)+(DCC_CE_lin_circ_mk_HC$CD42neg_3_lin))/3)
-  CD42neg$circ<- (((DCC_CE_lin_circ_mk_HC$CD42neg_1)+(DCC_CE_lin_circ_mk_HC$CD42neg_2)+(DCC_CE_lin_circ_mk_HC$CD42neg_3))/3  )
+  CD42neg$ratio <- (((CD42neg$ratio1)+(CD42neg$ratio2)+(CD42neg$ratio3))/3) # average ratios
+  CD42neg$Lin<- (((DCC_CE_lin_circ_mk_HC$CD42neg_1_lin)+(DCC_CE_lin_circ_mk_HC$CD42neg_2_lin)+(DCC_CE_lin_circ_mk_HC$CD42neg_3_lin))/3) # average linear expression
+  CD42neg$circ<- (((DCC_CE_lin_circ_mk_HC$CD42neg_1)+(DCC_CE_lin_circ_mk_HC$CD42neg_2)+(DCC_CE_lin_circ_mk_HC$CD42neg_3))/3  ) # Average circRNA expression
   head(CD42neg)
   CD42neg[is.na(CD42neg)] = 0
   CD42neg <- subset(CD42neg, ratio>0)
